@@ -154,6 +154,7 @@ end
 -- the come-back-later marker never appears at all.
 
 local classify = run.loader.exports.npc_bubbles.classify
+local programFor = run.loader.exports.npc_bubbles.programFor
 
 do
   -- self-guarded: check the flag it sets itself
@@ -223,8 +224,6 @@ end
 -- blind to.
 
 do
-  local programFor = run.loader.exports.npc_bubbles.programFor
-
   -- shaped exactly like data/scripts/yellow_gifts.lua's Melanie
   local function melanie(g, ow, npc, done)
     local rows = { { "face_player" } }
@@ -261,6 +260,83 @@ do
   T.eq(programFor(function() end, game()), nil,
     "and one that never calls the runner does too")
   T.eq(programFor(nil, game()), nil, "a missing entry is not a program")
+end
+
+-- ------- a gift you have to accept
+--
+-- Melanie asks before handing the BULBASAUR over.  `ask` is answered at the
+-- time, not read off the save, so the walk has to assume a player who wants
+-- the thing says yes.  Leaving it false silently decided you had DECLINED
+-- every gift that asks first, which is why she never showed a bubble.
+
+do
+  local asked = {
+    { "show_text", "want it?" },
+    { "ask", "PleaseText" },
+    { "jump_if_false", "declined" },
+    { "give_pokemon", "BULBASAUR", 10 },
+    { "set_flag", "GOT_IT" },
+    { "jump", "done" },
+    { "label", "declined" },
+    { "show_text", "maybe later" },
+    { "label", "done" },
+  }
+  flags = {}
+  T.eq(classify(asked, game()), 1,
+    "a gift behind a yes/no prompt is still a gift")
+
+  -- and give_* itself reports whether it landed; a full bag must not read
+  -- as "you declined"
+  local full = {
+    { "give_item", "POTION" },
+    { "jump_if_false", 4 },
+    { "set_flag", "GOT_IT" },
+    { "show_text", "no room" },
+  }
+  T.eq(classify(full, game()), 1, "a gift that might not fit is still a gift")
+end
+
+-- ------- a closure whose gift is not in this build
+--
+-- A table script always contains its gift row, unreachable but visible.  A
+-- closure decides what to write BEFORE writing it, so an unmet prerequisite
+-- means the row is simply absent.  Rebuilding against a best-case save is
+-- what reveals there is something there at all -- and the flag that build
+-- would SET is what proves you have not already had it.
+
+do
+  local function melanieShaped(g, ow, npc, done)
+    local rows = {}
+    if g.save.flags.GOT_BULBA then
+      rows[#rows + 1] = { "show_text", "hope it is well" }
+    elseif (g.save.pikachuHappiness or 90) < 147 then
+      rows[#rows + 1] = { "show_text", "not yet" }
+    else
+      rows[#rows + 1] = { "give_pokemon", "BULBASAUR", 10 }
+      rows[#rows + 1] = { "set_flag", "GOT_BULBA" }
+    end
+    ow.runner:run(rows, { npc = npc, onDone = done })
+  end
+
+  local function state(happy, got)
+    flags = got and { GOT_BULBA = true } or {}
+    local g = game()
+    g.save.pikachuHappiness = happy
+    return g
+  end
+
+  local g = state(200, false)
+  T.eq(classify(programFor(melanieShaped, g), g, melanieShaped), 1,
+    "prerequisite met: a solid !")
+
+  g = state(10, false)
+  T.eq(classify(programFor(melanieShaped, g), g, melanieShaped), 4,
+    "prerequisite unmet: the faded ! even though this build has no gift row")
+
+  g = state(200, true)
+  T.eq(classify(programFor(melanieShaped, g), g, melanieShaped), nil,
+    "already claimed: nothing -- the flag that build would set is already on")
+  flags = {}
 end
 
 -- ------- the draw seam

@@ -3,6 +3,25 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.2.1
+
+### Fixed
+
+- Gifts you have to accept were invisible. `ask` is a yes/no prompt answered
+  at the time, not read off the save, and the walker left the last condition
+  false — so `jump_if_false` skipped straight past the gift. It was silently
+  deciding you had *declined* every gift that asks first, which is why
+  Melanie never showed anything. `ask`, `choice` and `give_*` now take the
+  branch a player who wants the thing would take.
+- A closure whose prerequisite is unmet writes no gift row at all, so there
+  was nothing for the come-back-later check to find. Closures are now
+  rebuilt a second time against a best-case save, which reveals whether a
+  gift exists at all.
+- That second build could then leave a faded `!` over a gift you had already
+  claimed, forever. A claimed gift is now recognised by the flag that build
+  would *set* already being on — the only workable receipt for a closure,
+  whose own check lives in Lua rather than in the rows.
+
 ## 1.2.0
 
 ### Added

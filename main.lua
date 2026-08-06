@@ -49,6 +49,14 @@ local TIER_OPTION = { "gift", "event", "story", "later" }
 -- exactly what the smile is for.
 local CONDITIONS = { check_flag = true, check_item = true, check_dex_owned = true }
 
+-- Commands whose result is decided in the moment rather than read off the
+-- save: a prompt the player answers, and a gift that either lands or finds
+-- the bag full.  The walk assumes the willing path.
+local OPTIMISTIC = {
+  ask = true, choice = true,
+  give_item = true, give_pokemon = true, give_money = true, trade = true,
+}
+
 -- a script that jumps backwards could spin forever; no vanilla one does,
 -- but this runs every time a flag changes and must not be able to hang
 local MAX_STEPS = 400
@@ -60,6 +68,10 @@ return function(mod)
     { key = "story", label = "STORY BUBBLE", type = "toggle", default = true },
     { key = "later", label = "LATER BUBBLE", type = "toggle", default = true },
   })
+
+  -- forward declaration: classify needs to rebuild a closure, and the
+  -- builder is defined further down with the rest of the map handling
+  local programFor
 
   -- ------- reading the live state the branches ask about
 
@@ -119,6 +131,16 @@ return function(mod)
         if cond ~= nil then
           last = cond
           pc = pc + 1
+        elseif OPTIMISTIC[verb] then
+          -- `ask` is a yes/no prompt and give_* reports whether it landed.
+          -- Neither can be read off the save -- they are answered at the
+          -- time -- so the walk takes the branch a player who WANTS the
+          -- thing would take.  Leaving these false was silently deciding
+          -- you had declined every gift that asks first, which is how
+          -- Melanie's Bulbasaur went invisible.
+          last = true
+          if GIVES[verb] then best = 1 end
+          pc = pc + 1
         elseif verb == "jump_if_true" then
           pc = last and (target(row[2]) or (pc + 1)) or (pc + 1)
         elseif verb == "jump_if_false" then
@@ -169,12 +191,65 @@ return function(mod)
     return "later"
   end
 
+  -- A best-case stand-in for the save: nothing done yet, every item in the
+  -- bag, every number at its ceiling.
+  --
+  -- Only closures need this.  A table script always CONTAINS its gift row --
+  -- unreachable, but visible -- so "there is something here later" can be
+  -- read straight off it.  A closure decides what to write before writing
+  -- it, so an unmet prerequisite means the give row is simply absent and
+  -- there is nothing to find.  Building the program a second time against a
+  -- save that meets everything reveals whether a gift exists at all.
+  local function permissive(game)
+    local save = (game and game.save) or {}
+    local fake = setmetatable({
+      flags = setmetatable({}, { __index = function() return false end }),
+      inventory = setmetatable({}, { __index = function() return 99 end }),
+    }, { __index = function(_, key)
+      local v = save[key]
+      if type(v) == "number" then return math.huge end
+      return v
+    end })
+    return setmetatable({ save = fake }, { __index = game })
+  end
+
+  -- A gift is already claimed when a flag the giving path SETS is already
+  -- true.  For a closure this is the only workable test: the flag it checks
+  -- lives in Lua, not in the rows, so it never appears in either build --
+  -- but the flag it would SET does, and that flag being set already is the
+  -- receipt.  Without this Melanie kept a faded ! forever after handing the
+  -- BULBASAUR over, which is the exact stale bubble this was meant to avoid.
+  local function alreadyClaimed(prog, game)
+    for _, row in ipairs(prog or {}) do
+      if type(row) == "table" and row[1] == "set_flag"
+         and condition("check_flag", row[2], game) then
+        return true
+      end
+    end
+    return false
+  end
+
+  local function hasGive(prog)
+    for _, row in ipairs(prog or {}) do
+      if type(row) == "table" and GIVES[row[1]] then return true end
+    end
+    return false
+  end
+
   -- The tier an NPC is worth right now, including the not-yet case.
-  local function classify(prog, game)
+  -- `entry` is the original talk entry, needed to rebuild a closure.
+  local function classify(prog, game, entry)
     local tier = reachableTier(prog, game)
     if tier == 1 or tier == 2 then return tier end
     -- a gift that exists but is out of reach, and has not been claimed
     if giftOutlook(prog, game) == "later" then return 4 end
+    -- closure with no gift in THIS build: ask what it would write at best
+    if type(entry) == "function" and not hasGive(prog) then
+      local best = programFor(entry, permissive(game))
+      if best and hasGive(best) and not alreadyClaimed(best, game) then
+        return 4
+      end
+    end
     return tier
   end
 
@@ -203,7 +278,7 @@ return function(mod)
   -- Nothing is executed: the fake runner never runs a row, and a closure
   -- that does not fit the pattern throws on the stub ow and is caught,
   -- leaving that NPC unclassified exactly as before.
-  local function programFor(prog, game, npc)
+  function programFor(prog, game, npc)
     if type(prog) == "table" then return prog end
     if type(prog) ~= "function" then return nil end
     local captured
@@ -226,7 +301,7 @@ return function(mod)
       local key = npc.def and npc.def.text
       local prog = programFor(key and talk[key], game, npc)
       if prog then
-        tiers[npc.id] = classify(prog, game)
+        tiers[npc.id] = classify(prog, game, key and talk[key])
       elseif type(key and talk[key]) == "function" then
         opaque[map.id .. "/" .. tostring(key)] = true
       end
