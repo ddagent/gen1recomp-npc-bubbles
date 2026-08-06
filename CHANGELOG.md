@@ -3,6 +3,27 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.1.0
+
+### Fixed
+
+- A smiley appeared over almost every NPC. The tier-3 rule assigned itself
+  to any command that was not a gift or a world change, so it meant "has a
+  script at all" rather than "reacts to your progress" — 116 of 173 smileys
+  were over people who say one fixed line. Tier 3 now requires a
+  `check_flag` / `check_item` / `check_dex_owned` somewhere in the program.
+  Total bubbles across the game drop from 250 to 134.
+
+### Added
+
+- Closure talk entries are now read too. They are not opaque logic: they
+  read your save, build the rows the conversation would run, and hand them
+  to `ow.runner:run` as their last act. The mod calls them with a runner
+  that captures instead of running, and walks the program that falls out —
+  so Melanie's Bulbasaur is classified like any other, and vanishes once you
+  hold it. Nothing is executed; a closure that does not fit the pattern is
+  caught and left unclassified exactly as before.
+
 ## 1.0.2
 
 ### Fixed

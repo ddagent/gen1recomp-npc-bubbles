@@ -64,7 +64,12 @@ end
 
 do
   flags = {}
-  T.eq(tierOf({ { "show_text", "hi" } }, game()), 3, "plain text is tier 3")
+  -- one fixed line is not a hint; it used to get a smiley, which put one
+  -- over every NPC in the game
+  T.eq(tierOf({ { "show_text", "hi" } }, game()), nil,
+    "a script that only says one fixed line gets NO bubble")
+  T.eq(tierOf({ { "check_flag", "X" }, { "show_text", "hi" } }, game()), 3,
+    "but one that branches on your state is tier 3")
   T.eq(tierOf({ { "set_flag", "X" } }, game()), 2, "a world change is tier 2")
   T.eq(tierOf({ { "give_item", "POTION" } }, game()), 1, "a gift is tier 1")
   T.eq(tierOf({ { "trade", "NIDORAN" } }, game()), 1, "a trade is tier 1")
@@ -120,6 +125,7 @@ do
 
   -- a backward jump is a loop; the walk has to end
   local looped = tierOf({
+    { "check_flag", "X" },
     { "show_text", "a" },
     { "jump", 1 },
   }, game())
@@ -137,6 +143,56 @@ do
   T.eq(tierOf(DAISY, game()), 1,
     "turning a bubble off does not change what an NPC is worth")
   run.loader.modOptions.npc_bubbles = {}
+end
+
+-- ------- closures are builders, not black boxes
+--
+-- A talk entry may be a function.  It is not opaque logic: it reads the
+-- save, assembles the rows the conversation would run, and hands them to
+-- ow.runner:run as its last act.  Calling it with a runner that captures
+-- instead of running yields the exact program for the current save --
+-- which is Melanie's Bulbasaur, and 133 other entries the mod used to be
+-- blind to.
+
+do
+  local programFor = run.loader.exports.npc_bubbles.programFor
+
+  -- shaped exactly like data/scripts/yellow_gifts.lua's Melanie
+  local function melanie(g, ow, npc, done)
+    local rows = { { "face_player" } }
+    if g.save.flags.EVENT_GOT_BULBASAUR_IN_CERULEAN then
+      rows[#rows + 1] = { "show_text", "MelanieText4" }
+    elseif (g.save.pikachuHappiness or 90) < 147 then
+      rows[#rows + 1] = { "show_text", "MelanieText1" }
+    else
+      rows[#rows + 1] = { "give_pokemon", "BULBASAUR", 10 }
+      rows[#rows + 1] = { "set_flag", "EVENT_GOT_BULBASAUR_IN_CERULEAN" }
+    end
+    ow.runner:run(rows, { npc = npc, onDone = done })
+  end
+
+  flags = {}
+  local g = game()
+  g.save.pikachuHappiness = 200
+  T.eq(tierOf(programFor(melanie, g), g), 1,
+    "a happy Pikachu makes Melanie a gift, read out of a closure")
+
+  g.save.pikachuHappiness = 10
+  T.eq(tierOf(programFor(melanie, g), g), nil,
+    "an unhappy Pikachu and she is only talk")
+
+  g.save.pikachuHappiness = 200
+  flags.EVENT_GOT_BULBASAUR_IN_CERULEAN = true
+  T.eq(tierOf(programFor(melanie, g), g), nil,
+    "and once you hold the BULBASAUR she goes quiet")
+  flags = {}
+
+  -- a closure that does not fit the pattern must degrade, not throw
+  T.eq(programFor(function() error("nope") end, game()), nil,
+    "a closure that throws leaves the NPC unclassified")
+  T.eq(programFor(function() end, game()), nil,
+    "and one that never calls the runner does too")
+  T.eq(programFor(nil, game()), nil, "a missing entry is not a program")
 end
 
 -- ------- the draw seam

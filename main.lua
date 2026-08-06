@@ -36,6 +36,11 @@ local CHANGES = {
 local BUBBLE = { 1, 2, 3 }
 local TIER_OPTION = { "gift", "event", "story" }
 
+-- The three commands that read your state.  A program containing one is
+-- one whose dialogue can differ depending on what you have done -- which is
+-- exactly what the smile is for.
+local CONDITIONS = { check_flag = true, check_item = true, check_dex_owned = true }
+
 -- a script that jumps backwards could spin forever; no vanilla one does,
 -- but this runs every time a flag changes and must not be able to hang
 local MAX_STEPS = 400
@@ -84,7 +89,17 @@ return function(mod)
       return labels and labels[v] or nil
     end
 
-    local pc, last, best, steps = 1, false, nil, 0
+    -- Tier 3 means "their dialogue reacts to your progress", so it needs a
+    -- condition somewhere in the program.  Assigning it to anything that
+    -- was not a gift or a change made it mean "has a script at all", and
+    -- put a smiley over every NPC who says one fixed line -- 116 of 173 of
+    -- them, which is how a hint becomes wallpaper.
+    local reactive = false
+    for _, row in ipairs(prog) do
+      if type(row) == "table" and CONDITIONS[row[1]] then reactive = true break end
+    end
+
+    local pc, last, best, steps = 1, false, reactive and 3 or nil, 0
     while pc <= #prog and steps < MAX_STEPS do
       steps = steps + 1
       local row = prog[pc]
@@ -106,8 +121,7 @@ return function(mod)
           pc = (to and to > pc) and to or (pc + 1)
         else
           if GIVES[verb] then best = 1
-          elseif CHANGES[verb] and best ~= 1 then best = 2
-          elseif not best then best = 3 end
+          elseif CHANGES[verb] and best ~= 1 then best = 2 end
           pc = pc + 1
         end
       end
@@ -126,6 +140,27 @@ return function(mod)
   local opaque = {}         -- text ids whose talk entry is a function
   local reported = false
 
+  -- A talk entry is either an instruction list or a function -- and the
+  -- function is not opaque logic, it is a BUILDER.  It reads your save,
+  -- assembles the rows the conversation would run, and hands them to
+  -- ow.runner:run as its very last act (see Melanie's Bulbasaur in
+  -- data/scripts/yellow_gifts.lua).  So call it with a runner that captures
+  -- instead of running, and the program it built for your exact save falls
+  -- out -- the same thing the walker reads for the table case.
+  --
+  -- Nothing is executed: the fake runner never runs a row, and a closure
+  -- that does not fit the pattern throws on the stub ow and is caught,
+  -- leaving that NPC unclassified exactly as before.
+  local function programFor(prog, game, npc)
+    if type(prog) == "table" then return prog end
+    if type(prog) ~= "function" then return nil end
+    local captured
+    local stub = { runner = { run = function(_, rows) captured = rows end } }
+    local ok = pcall(prog, game, stub, npc, function() end)
+    if ok and type(captured) == "table" then return captured end
+    return nil
+  end
+
   local function rebuild()
     tiers = {}
     local game = mod.world and mod.world.game
@@ -137,14 +172,11 @@ return function(mod)
     if not talk then return end
     for _, npc in ipairs(ow.npcs or {}) do
       local key = npc.def and npc.def.text
-      local prog = key and talk[key]
-      if type(prog) == "function" then
-        -- a hand-written closure, not an instruction list: we cannot see
-        -- inside it, so this NPC gets no bubble even if it hands you the
-        -- world.  Collected so the gap is visible rather than silent.
-        opaque[map.id .. "/" .. tostring(key)] = true
-      elseif type(prog) == "table" then
+      local prog = programFor(key and talk[key], game, npc)
+      if prog then
         tiers[npc.id] = reachableTier(prog, game)
+      elseif type(key and talk[key]) == "function" then
+        opaque[map.id .. "/" .. tostring(key)] = true
       end
     end
   end
@@ -236,6 +268,7 @@ return function(mod)
   end
 
   mod.exports.reachableTier = reachableTier
+  mod.exports.programFor = programFor
   mod.exports.tiers = function() return tiers end
 
   -- Wrapping NPC.draw rather than the overworld's: it is the one call that
