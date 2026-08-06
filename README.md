@@ -1,84 +1,66 @@
 # NPC Bubbles
 
-A bubble over the NPCs who actually do something — so the person holding the
-Town Map does not look like the person who wants to tell you about ledges.
+> This mod was coded by AI.
+
+Puts a bubble over the NPCs who actually do something, so the person holding
+a free TM does not look like the person who wants to tell you about ledges.
 
 | Bubble | Means |
 | --- | --- |
-| `!` | talking to them hands you something |
-| `?` | talking to them changes the world |
-| smile | their dialogue reacts to your progress |
+| **`!`** | talk to them and you get something, right now |
+| **faded `!`** | something here later — you cannot claim it yet |
+| **`?`** | talking to them changes something in the world |
+| **smile** | what they say depends on how far you have got |
 
-All three are the engine's own emote sheet — the same `!` a trainer shows
-when they spot you, baked through the same OBP0 remap so the bubble's
-interior reads white rather than grey.
+They are the game's own bubbles — the same `!` a trainer shows when they spot
+you — and they sit in the same place above the head.
+
+Try it: walk into Viridian City and look for a `!`.
+
+## What it does
+
+A bubble only appears when it is true *now*. Blue's sister has nothing before
+you pick a starter, shows a **`!`** once you can take the Town Map, and goes
+quiet the moment you are holding it. Nothing lingers after you have taken it.
+
+The **faded `!`** is for people who will have something for you but not yet —
+Melanie before your Pikachu likes you enough, the bike shop before you have a
+voucher. It turns solid when you can actually claim it.
+
+Bubbles update the instant something changes, so one disappears as you finish
+the conversation rather than on the next screen.
+
+Poké Balls on the ground, legendary encounters and trainers are left alone —
+they already look like what they are.
+
+## Options
+
+Set these in the in-game mod manager.
+
+| Option | Shows | Default |
+| --- | --- | --- |
+| `GIFT BUBBLE` | `!` — you get something now | on |
+| `EVENT BUBBLE` | `?` — the world changes | on |
+| `STORY BUBBLE` | smile — dialogue tracks your progress | on |
+| `LATER BUBBLE` | faded `!` — something here later | on |
+| `LATER FADE %` | how solid the faded `!` looks | 75 |
+
+If the smiles feel like too much, turn `STORY BUBBLE` off first — it is the
+broadest one.
+
+## Notes
+
+- **No bubble does not always mean nothing.** A few interactions are written
+  in a way the mod cannot read; those fall back to the smile, but the cover
+  is not perfect.
+- **"Later" can mean much later.** Some gifts are behind badges you will not
+  have for hours, so a faded `!` may sit there a long time. Turn
+  `LATER BUBBLE` off if that bothers you.
+- Works on Red, Blue and Yellow.
 
 ## Install
 
 Download the `.zip` from
 [Releases](https://github.com/ddagent/gen1recomp-npc-bubbles/releases) and
-install it in the game: **MODS → Import mod .zip**.
-
-## Test it
-
-```sh
-luajit mods/npc_bubbles/tests/npc_bubbles_test.lua   # 21 checks, no ROM needed
-python3 tools/modkit.py validate npc_bubbles
-```
-
-## How it knows
-
-`OverworldState:talkTo` resolves an interaction in a fixed order, and the
-hand-ported scripts are **data** — numbered instruction lists with
-conditional jumps:
-
-```lua
-{ "check_flag", "EVENT_GOT_TOWN_MAP" },
-{ "jump_if_true", 10 },          -- already have it: skip the gift
-{ "check_flag", "EVENT_GOT_STARTER" },
-{ "jump_if_false", 12 },         -- not eligible yet: skip the gift
-{ "give_item", "TOWN_MAP", 1, "_GotMapText" },
-```
-
-So the mod walks the same instructions the game would walk, evaluating the
-branches against your live save, and reports what a conversation would
-produce **right now**. Nothing is executed — commands are only classified.
-
-That is stronger than "this NPC has a gift". Blue's sister is silent before
-you have a starter *and* silent once you hold the map, because in both cases
-the `give_item` is unreachable. One mechanism covers "already taken" and
-"not yet eligible" without either being special-cased.
-
-Bubbles are rebuilt when you enter a map and whenever a flag changes. Since
-a gift script sets its flag as its last step, the bubble clears on the same
-frame the conversation ends — no polling, no lag.
-
-## Options
-
-| Option | Shows | Default |
-| --- | --- | --- |
-| `GIFT BUBBLE` | `!` — you receive something | on |
-| `EVENT BUBBLE` | `?` — the world changes | on |
-| `STORY BUBBLE` | smile — dialogue reacts to you | on |
-
-`STORY BUBBLE` is the broadest and the weakest signal: those NPCs give
-nothing and change nothing, their words just differ depending on your flags.
-If the smiles become wallpaper, turn that one off first.
-
-## Known limits
-
-- **Not every NPC can be read.** Some `talk` entries are hand-written Lua
-  closures rather than instruction lists; those cannot be inspected without
-  running them, so those NPCs get no bubble even if they hand you something.
-  The count is logged on load. A missing bubble does not prove there is
-  nothing there.
-- **Item balls, static encounters and trainers are deliberately skipped.**
-  A Poké Ball on the ground already looks like a Poké Ball, a static
-  encounter is drawn as the mon, and trainers get a real `!` from the engine.
-- Only NPCs on the current map are considered.
-
-## Layout
-
-- `manifest.json` — identity, version range, load order, permissions
-- `main.lua` — the entry chunk; receives the `mod` object
-- `tests/` — the ROM-free suite; excluded from the package
+install it from the game: **MODS → Import mod .zip**. After that the launcher
+offers **Update** whenever a new version appears.
