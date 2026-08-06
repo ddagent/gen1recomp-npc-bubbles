@@ -3,6 +3,16 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.3.0
+
+### Changed
+
+- The come-back-later `!` was too faint to read at 45%. It is now a
+  `LATER FADE %` dial, default 75, read at draw time so it moves as you turn
+  it. Where the line sits between "clearly subordinate" and "invisible"
+  depends on the renderer and how bright the ground is, so it should not
+  have been a constant.
+
 ## 1.2.1
 
 ### Fixed

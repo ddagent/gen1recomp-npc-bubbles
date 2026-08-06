@@ -41,7 +41,6 @@ local CHANGES = {
 -- without inventing anything.  It also reads as provisional, which suits a
 -- judgement that can occasionally be wrong.
 local BUBBLE = { 1, 2, 3, 1 }
-local ALPHA  = { 1, 1, 1, 0.45 }
 local TIER_OPTION = { "gift", "event", "story", "later" }
 
 -- The three commands that read your state.  A program containing one is
@@ -67,6 +66,13 @@ return function(mod)
     { key = "event", label = "EVENT BUBBLE", type = "toggle", default = true },
     { key = "story", label = "STORY BUBBLE", type = "toggle", default = true },
     { key = "later", label = "LATER BUBBLE", type = "toggle", default = true },
+    -- How solid the come-back-later ! is, as a percent.  It has to read as
+    -- subordinate to a real one without disappearing into the tilework --
+    -- and where that line sits depends on the renderer you use and how
+    -- bright the ground is, so it is a dial rather than a constant.  Read
+    -- at draw time, so it moves as you turn it.
+    { key = "later_fade", label = "LATER FADE %", type = "number",
+      default = 75, min = 20, max = 100, step = 5 },
   })
 
   -- forward declaration: classify needs to rebuild a closure, and the
@@ -386,7 +392,12 @@ return function(mod)
     if not (image and quads and quads[BUBBLE[tier]]) then return end
     local g = love.graphics
     local r, gg, b, a = g.getColor()
-    g.setColor(1, 1, 1, ALPHA[tier] or 1)
+    local alpha = 1
+    if tier == 4 then
+      alpha = math.max(0.2, math.min(1,
+        (tonumber(mod.options:get("later_fade")) or 75) / 100))
+    end
+    g.setColor(1, 1, 1, alpha)
     -- fxEmote's own offsets: SpriteRenderer puts the sprite's top at
     -- py - camY - 4, so -14 lands the bubble just above the head
     g.draw(image, quads[BUBBLE[tier]],
