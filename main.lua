@@ -216,7 +216,14 @@ return function(mod)
       if type(v) == "number" then return math.huge end
       return v
     end })
-    return setmetatable({ save = fake }, { __index = game })
+    -- already safe: a synthetic save, and a stack that swallows pushes, so
+    -- programFor leaves it alone rather than deep-copying the metatables away
+    local noop = function() end
+    return setmetatable({
+      __sandboxed = true,
+      save = fake,
+      stack = { push = noop, pop = noop, top = noop, states = {} },
+    }, { __index = game })
   end
 
   -- A gift is already claimed when a flag the giving path SETS is already
@@ -281,15 +288,44 @@ return function(mod)
   -- instead of running, and the program it built for your exact save falls
   -- out -- the same thing the walker reads for the table case.
   --
-  -- Nothing is executed: the fake runner never runs a row, and a closure
-  -- that does not fit the pattern throws on the stub ow and is caught,
-  -- leaving that NPC unclassified exactly as before.
+  -- NOT every closure is a builder.  The bike shop clerk pushes its own
+  -- text boxes and touches the bag directly (data/scripts/story2.lua) --
+  -- so probing one with the live game could put a text box on screen or
+  -- write to the save.  A pcall does not help: those are successes, not
+  -- errors.
+  --
+  -- So a probe never sees the real thing.  It gets a copy of the save
+  -- (writes land on the copy and are dropped), a stack that swallows
+  -- pushes, and a runner that captures rather than runs.  A builder yields
+  -- its rows; an imperative closure spends itself harmlessly on the stub
+  -- and yields nothing.
+  local function copy(v, depth)
+    if type(v) ~= "table" or (depth or 0) > 6 then return v end
+    local out = {}
+    for k, item in pairs(v) do out[k] = copy(item, (depth or 0) + 1) end
+    return out
+  end
+
+  local function sandbox(game)
+    if not game then return nil end
+    local noop = function() end
+    return setmetatable({
+      __sandboxed = true,
+      save = copy(game.save),
+      stack = { push = noop, pop = noop, top = noop, states = {} },
+    }, { __index = game })
+  end
+
   function programFor(prog, game, npc)
     if type(prog) == "table" then return prog end
     if type(prog) ~= "function" then return nil end
     local captured
     local stub = { runner = { run = function(_, rows) captured = rows end } }
-    local ok = pcall(prog, game, stub, npc, function() end)
+    -- a caller may hand in an already-safe game (the best-case probe);
+    -- copying it again would flatten the metatables it is built from
+    local safe = (type(game) == "table" and game.__sandboxed) and game
+                 or sandbox(game)
+    local ok = pcall(prog, safe, stub, npc, function() end)
     if ok and type(captured) == "table" then return captured end
     return nil
   end
@@ -306,10 +342,17 @@ return function(mod)
     for _, npc in ipairs(ow.npcs or {}) do
       local key = npc.def and npc.def.text
       local prog = programFor(key and talk[key], game, npc)
+      local entry = key and talk[key]
       if prog then
-        tiers[npc.id] = classify(prog, game, key and talk[key])
-      elseif type(key and talk[key]) == "function" then
+        tiers[npc.id] = classify(prog, game, entry)
+      elseif type(entry) == "function" then
+        -- A closure we cannot read is still a signal.  Ordinary NPCs have
+        -- no script at all; a hand-written one exists precisely because the
+        -- interaction did not fit the command rows -- the bike shop clerk,
+        -- Misty, the badge house.  So it is not "unknown, show nothing",
+        -- it is "something bespoke happens here", which is the smile.
         opaque[map.id .. "/" .. tostring(key)] = true
+        tiers[npc.id] = 3
       end
     end
   end

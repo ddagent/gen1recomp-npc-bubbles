@@ -339,6 +339,36 @@ do
   flags = {}
 end
 
+-- ------- probing must never touch the real game
+--
+-- Not every closure is a builder.  The bike shop clerk pushes its own text
+-- boxes and reaches into the bag (data/scripts/story2.lua), so handing a
+-- probe the live game could put a box on screen or write to the save --
+-- and pcall does not catch that, because those are successes.
+
+do
+  local pushed, wrote = 0, 0
+  local live = {
+    save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+    stack = { push = function() pushed = pushed + 1 end },
+  }
+
+  -- an imperative closure, shaped like the clerk: no rows, real side effects
+  local function clerk(g)
+    g.stack:push("a text box")
+    g.save.inventory.BICYCLE = 1
+    g.save.flags.EVENT_GOT_BICYCLE = true
+    wrote = wrote + 1
+  end
+
+  local prog = programFor(clerk, live)
+  T.eq(prog, nil, "an imperative closure yields no program")
+  T.eq(pushed, 0, "and cannot push anything onto the real stack")
+  T.check(wrote > 0, "it did run and did write -- to the copy, not the save")
+  T.eq(live.save.inventory.BICYCLE, nil, "the real bag is untouched")
+  T.eq(live.save.flags.EVENT_GOT_BICYCLE, nil, "and the real flags are too")
+end
+
 -- ------- the draw seam
 --
 -- 1.0.0 drew nothing (wrong pass) and 1.0.1 drew several tiles east (wrong

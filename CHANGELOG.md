@@ -3,6 +3,25 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.4.0
+
+### Fixed
+
+- **Probing could have touched your game.** Not every closure is a builder:
+  the bike shop clerk pushes its own text boxes and reaches into the bag
+  (`data/scripts/story2.lua`), and a probe handed it the live game. A pcall
+  does not help there, because a text box appearing is a success, not an
+  error. Probes now get a copy of the save and a stack that swallows
+  pushes, so an imperative closure spends itself harmlessly on the stub.
+
+### Changed
+
+- An NPC whose script cannot be read now shows the smile rather than
+  nothing. A closure exists precisely because the interaction did not fit
+  the command rows — the bike shop clerk, Misty, the badge house — so
+  "cannot read this" is itself a signal that something bespoke happens here.
+  Ordinary NPCs have no script at all and stay bare.
+
 ## 1.3.0
 
 ### Changed
