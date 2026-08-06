@@ -1,0 +1,5 @@
+# The release .zip is built from `git archive HEAD`; anything marked
+# export-ignore stays out of the shipped package.
+tests/ export-ignore
+.gitattributes export-ignore
+.modkitignore export-ignore

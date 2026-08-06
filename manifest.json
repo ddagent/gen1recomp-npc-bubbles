@@ -1,0 +1,21 @@
+{
+  "id": "npc_bubbles",
+  "name": "NPC Bubbles",
+  "version": "1.0.0",
+  "api": 2,
+  "entry": "main.lua",
+  "profile": "content",
+  "game_version": ">=0.0.0-0 <2.0.0",
+  "category": "UI",
+  "priority": 100,
+  "dependencies": [],
+  "optional_dependencies": [],
+  "conflicts": [],
+  "incompatible": [],
+  "experimental": false,
+  "description": "Put a bubble over NPCs who actually do something: a ! for a gift, a ? for an event, a smile for story dialogue.",
+  "permissions": [
+    "engine_internals"
+  ],
+  "github": "ddagent/gen1recomp-npc-bubbles"
+}
