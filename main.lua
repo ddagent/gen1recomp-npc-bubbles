@@ -221,10 +221,11 @@ return function(mod)
     for _, npc in ipairs(ow.npcs or {}) do
       local tier = tiers[npc.id]
       if tier and enabled(tier) and quads[BUBBLE[tier]] then
-        -- the slot the engine's own sighting bubble uses: over the head,
-        -- half a tile right of the sprite's foot
+        -- exactly where the engine puts a trainer's sighting bubble
+        -- (OverworldController's fxEmote): +4 across, -14 up from the
+        -- sprite's origin, so ours sits at the same height as a real one
         g.draw(image, quads[BUBBLE[tier]],
-               math.floor(npc.px - cam.x), math.floor(npc.py - cam.y - 8))
+               npc.px - cam.x + 4, npc.py - cam.y - 14)
       end
     end
   end
@@ -233,17 +234,26 @@ return function(mod)
   mod.exports.tiers = function() return tiers end
 
   -- There is no overworld draw hook, so the mod decorates the state's own
-  -- draw the way quality_of_life decorates a battle's: wrap once, call the
-  -- original, then add to it.
+  -- draw the way quality_of_life decorates a battle's.
+  --
+  -- It has to be drawWorld, NOT draw.  OverworldState:draw is
+  --
+  --   beginWorldPass() / drawWorld() / endWorldPass() / drawUI()
+  --
+  -- so anything added after draw() returns lands outside the world pass,
+  -- in whatever space the renderer was left in -- which is why the first
+  -- version drew nothing you could see.  The engine's own sighting bubble
+  -- is inside drawWorld, and that is the space npc.px - cam.x is measured
+  -- in, so this belongs there too.
   local wrapped = setmetatable({}, { __mode = "k" })
 
   local function attach()
     local ow = mod.world and mod.world:overworld()
-    if not ow or wrapped[ow] or type(ow.draw) ~= "function" then return end
+    if not ow or wrapped[ow] or type(ow.drawWorld) ~= "function" then return end
     wrapped[ow] = true
-    local baseDraw = ow.draw
-    ow.draw = function(self, ...)
-      baseDraw(self, ...)
+    local baseDrawWorld = ow.drawWorld
+    ow.drawWorld = function(self, ...)
+      baseDrawWorld(self, ...)
       local ok, err = pcall(drawBubbles, self)
       if not ok then mod.log:error("bubble draw failed: %s", tostring(err)) end
     end

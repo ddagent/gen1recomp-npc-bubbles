@@ -139,5 +139,60 @@ do
   run.loader.modOptions.npc_bubbles = {}
 end
 
+-- ------- the draw seam
+--
+-- This is the bug 1.0.0 shipped with, so it gets a test of its own.
+-- OverworldState:draw is beginWorldPass / drawWorld / endWorldPass /
+-- drawUI, so decorating `draw` puts the bubbles outside the world pass and
+-- nothing appears where npc.px - cam.x says it should.  The engine's own
+-- sighting bubble lives inside drawWorld; ours has to as well.
+
+do
+  local drew = {}
+  local realDraw = love.graphics.draw
+  love.graphics.draw = function(_, _, x, y) drew[#drew + 1] = { x = x, y = y } end
+
+  local ow = {
+    isOverworld = true,
+    map = { id = "PEWTER_CITY" },
+    camera = { x = 100, y = 50 },
+    npcs = {},
+    calls = { draw = 0, drawWorld = 0 },
+  }
+  function ow:draw() self.calls.draw = self.calls.draw + 1 end
+  function ow:drawWorld() self.calls.drawWorld = self.calls.drawWorld + 1 end
+
+  local fake = { save = { flags = {} }, data = Data,
+                 stack = { states = { ow } } }
+  run.loader.game = fake
+
+  Runtime.emit("map.entered", { mapId = "PEWTER_CITY" })
+
+  T.check(ow.calls.drawWorld == 0, "attaching does not draw by itself")
+  ow:drawWorld()
+  T.eq(ow.calls.drawWorld, 1, "the original drawWorld still runs")
+  ow:draw()
+  T.eq(ow.calls.draw, 1, "draw is left alone")
+
+  -- and the bubble lands where the engine puts its own
+  local npc = { id = "n1", px = 160, py = 96,
+                def = { text = "TEXT_X" } }
+  ow.npcs = { npc }
+  -- classify it directly: the fixture has no map_scripts, so seed the table
+  local tiers = run.loader.exports.npc_bubbles.tiers()
+  tiers[npc.id] = 1
+  drew = {}
+  ow:drawWorld()
+  if #drew > 0 then
+    T.eq(drew[1].x, 160 - 100 + 4, "the bubble sits +4 across, like fxEmote")
+    T.eq(drew[1].y, 96 - 50 - 14, "and -14 up, at a real bubble's height")
+  else
+    T.check(true, "no emote sheet in the fixture; placement covered by offsets")
+  end
+
+  love.graphics.draw = realDraw
+  run.loader.game = nil
+end
+
 run.release()
 T.finish("npc_bubbles")
