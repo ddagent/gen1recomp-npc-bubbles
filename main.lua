@@ -209,57 +209,57 @@ return function(mod)
     return mod.options:get(TIER_OPTION[tier]) == true
   end
 
-  local function drawBubbles(ow)
-    if not next(tiers) then return end
-    local game = mod.world and mod.world.game
-    local image = art(game)
-    if not image then return end
-    local cam = ow.camera
-    if not cam then return end
+  -- Drawn per NPC, immediately after that NPC's own sprite, in whatever
+  -- space the sprite was drawn in.
+  --
+  -- This matters because the overworld has two draw paths.  The flat one
+  -- blits sprites at px - camX; the tilt one (the voxel diorama) wraps each
+  -- sprite in a billboard transform and calls the engine's own emote
+  -- through an `at(...)` helper.  A bubble drawn once per frame from
+  -- outside would need to know which path is live and reproduce its
+  -- transform -- which is how the first attempt ended up several tiles east
+  -- of the NPC.  Riding the sprite's own draw call inherits the transform
+  -- for free, so the offsets below are correct in both modes.
+  local function drawFor(npc, camX, camY)
+    local tier = tiers[npc.id]
+    if not (tier and enabled(tier)) then return end
+    local image = art(mod.world and mod.world.game)
+    if not (image and quads and quads[BUBBLE[tier]]) then return end
     local g = love.graphics
+    local r, gg, b, a = g.getColor()
     g.setColor(1, 1, 1, 1)
-    for _, npc in ipairs(ow.npcs or {}) do
-      local tier = tiers[npc.id]
-      if tier and enabled(tier) and quads[BUBBLE[tier]] then
-        -- exactly where the engine puts a trainer's sighting bubble
-        -- (OverworldController's fxEmote): +4 across, -14 up from the
-        -- sprite's origin, so ours sits at the same height as a real one
-        g.draw(image, quads[BUBBLE[tier]],
-               npc.px - cam.x + 4, npc.py - cam.y - 14)
-      end
-    end
+    -- fxEmote's own offsets: SpriteRenderer puts the sprite's top at
+    -- py - camY - 4, so -14 lands the bubble just above the head
+    g.draw(image, quads[BUBBLE[tier]],
+           math.floor(npc.px - camX) + 4, math.floor(npc.py - camY) - 14)
+    g.setColor(r, gg, b, a)
   end
 
   mod.exports.reachableTier = reachableTier
   mod.exports.tiers = function() return tiers end
 
-  -- There is no overworld draw hook, so the mod decorates the state's own
-  -- draw the way quality_of_life decorates a battle's.
-  --
-  -- It has to be drawWorld, NOT draw.  OverworldState:draw is
-  --
-  --   beginWorldPass() / drawWorld() / endWorldPass() / drawUI()
-  --
-  -- so anything added after draw() returns lands outside the world pass,
-  -- in whatever space the renderer was left in -- which is why the first
-  -- version drew nothing you could see.  The engine's own sighting bubble
-  -- is inside drawWorld, and that is the space npc.px - cam.x is measured
-  -- in, so this belongs there too.
-  local wrapped = setmetatable({}, { __mode = "k" })
+  -- Wrapping NPC.draw rather than the overworld's: it is the one call that
+  -- happens once per NPC, inside whichever transform that NPC's sprite is
+  -- being drawn under.  Wrapped on the class, so every NPC on every map is
+  -- covered by a single wrap and nothing needs re-attaching on a map change.
+  local attached = false
 
   local function attach()
-    local ow = mod.world and mod.world:overworld()
-    if not ow or wrapped[ow] or type(ow.drawWorld) ~= "function" then return end
-    wrapped[ow] = true
-    local baseDrawWorld = ow.drawWorld
-    ow.drawWorld = function(self, ...)
-      baseDrawWorld(self, ...)
-      local ok, err = pcall(drawBubbles, self)
+    if attached then return end
+    local NPC = require("src.world.NPC")
+    if type(NPC.draw) ~= "function" then return end
+    attached = true
+    local baseDraw = NPC.draw
+    NPC.draw = function(self, camX, camY, ...)
+      baseDraw(self, camX, camY, ...)
+      local ok, err = pcall(drawFor, self, camX or 0, camY or 0)
       if not ok then mod.log:error("bubble draw failed: %s", tostring(err)) end
     end
-    rebuild()
   end
+
+  mod.exports.drawFor = drawFor
 
   mod.events:on("game.ready", attach)
   mod.events:on("map.entered", attach)
+  attach()
 end

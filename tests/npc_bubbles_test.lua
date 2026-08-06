@@ -141,57 +141,51 @@ end
 
 -- ------- the draw seam
 --
--- This is the bug 1.0.0 shipped with, so it gets a test of its own.
--- OverworldState:draw is beginWorldPass / drawWorld / endWorldPass /
--- drawUI, so decorating `draw` puts the bubbles outside the world pass and
--- nothing appears where npc.px - cam.x says it should.  The engine's own
--- sighting bubble lives inside drawWorld; ours has to as well.
+-- 1.0.0 drew nothing (wrong pass) and 1.0.1 drew several tiles east (wrong
+-- transform).  Both came from drawing once per frame from outside.  The
+-- overworld has two paths -- a flat blit and a tilt/billboard one that
+-- wraps each sprite in its own transform -- so the only position that is
+-- right in both is the one the sprite itself was just drawn at.  Hence the
+-- wrap is on NPC.draw, per NPC, inside that transform.
 
 do
+  local NPC = require("src.world.NPC")
+  T.check(NPC.draw ~= nil, "NPC.draw is the seam the mod wraps")
+
   local drew = {}
   local realDraw = love.graphics.draw
   love.graphics.draw = function(_, _, x, y) drew[#drew + 1] = { x = x, y = y } end
 
-  local ow = {
-    isOverworld = true,
-    map = { id = "PEWTER_CITY" },
-    camera = { x = 100, y = 50 },
-    npcs = {},
-    calls = { draw = 0, drawWorld = 0 },
-  }
-  function ow:draw() self.calls.draw = self.calls.draw + 1 end
-  function ow:drawWorld() self.calls.drawWorld = self.calls.drawWorld + 1 end
-
-  local fake = { save = { flags = {} }, data = Data,
-                 stack = { states = { ow } } }
-  run.loader.game = fake
-
-  Runtime.emit("map.entered", { mapId = "PEWTER_CITY" })
-
-  T.check(ow.calls.drawWorld == 0, "attaching does not draw by itself")
-  ow:drawWorld()
-  T.eq(ow.calls.drawWorld, 1, "the original drawWorld still runs")
-  ow:draw()
-  T.eq(ow.calls.draw, 1, "draw is left alone")
-
-  -- and the bubble lands where the engine puts its own
-  local npc = { id = "n1", px = 160, py = 96,
-                def = { text = "TEXT_X" } }
-  ow.npcs = { npc }
-  -- classify it directly: the fixture has no map_scripts, so seed the table
   local tiers = run.loader.exports.npc_bubbles.tiers()
+  local drawFor = run.loader.exports.npc_bubbles.drawFor
+
+  local npc = { id = "n1", px = 160, py = 96 }
   tiers[npc.id] = 1
+
   drew = {}
-  ow:drawWorld()
+  drawFor(npc, 100, 50)
   if #drew > 0 then
-    T.eq(drew[1].x, 160 - 100 + 4, "the bubble sits +4 across, like fxEmote")
-    T.eq(drew[1].y, 96 - 50 - 14, "and -14 up, at a real bubble's height")
+    -- SpriteRenderer puts the sprite top at py - camY - 4, so -14 sits the
+    -- bubble just above the head, matching the engine's own fxEmote
+    T.eq(drew[1].x, 160 - 100 + 4, "the bubble is +4 across from the sprite")
+    T.eq(drew[1].y, 96 - 50 - 14, "and -14 up, just above the head")
   else
-    T.check(true, "no emote sheet in the fixture; placement covered by offsets")
+    T.check(true, "no emote sheet in the fixture; offsets asserted in code")
   end
 
+  -- an NPC with no tier draws nothing at all
+  drew = {}
+  drawFor({ id = "unknown", px = 0, py = 0 }, 0, 0)
+  T.eq(#drew, 0, "an unclassified NPC gets no bubble")
+
+  -- and a disabled tier draws nothing
+  run.loader.modOptions.npc_bubbles = { gift = false }
+  drew = {}
+  drawFor(npc, 100, 50)
+  T.eq(#drew, 0, "a disabled tier draws nothing")
+  run.loader.modOptions.npc_bubbles = {}
+
   love.graphics.draw = realDraw
-  run.loader.game = nil
 end
 
 run.release()

@@ -3,6 +3,21 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.0.2
+
+### Fixed
+
+- Bubbles appeared several tiles east of their NPC. The overworld has two
+  draw paths: a flat blit, and a tilt/billboard one (the voxel diorama) that
+  wraps each sprite in its own transform and reaches the engine's emote
+  through an `at(...)` helper. Drawing once per frame from outside meant
+  reproducing whichever transform was live, and the flat coordinates landed
+  wrong under tilt.
+- The bubble is now drawn inside `NPC.draw`, immediately after that NPC's
+  own sprite, so it inherits whatever transform the sprite was drawn under
+  and is correct in both modes. One class-level wrap covers every NPC on
+  every map, so nothing needs re-attaching on a map change.
+
 ## 1.0.1
 
 ### Fixed
