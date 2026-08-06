@@ -3,6 +3,27 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.2.0
+
+### Added
+
+- A faded `!` for "there is something here, but not yet" — Melanie before
+  Pikachu is happy enough, the bike shop before you hold a voucher. The same
+  exclamation crop at lower opacity rather than a new symbol: nothing to
+  hand-draw, and it reads as the important kind of NPC without claiming to
+  be actionable.
+- `LATER BUBBLE` toggle, on by default.
+
+### Note
+
+Telling "not yet" from "already taken" is what lets this exist without the
+stale bubbles coming back. A claimed gift is blocked by the very flag its
+script set when it gave it to you; a prerequisite is anything else — an
+item, a happiness threshold, a badge. Of the 29 gift programs, 14 guard
+themselves that way and 15 are gated by something else, so both halves are
+real. It is a judgement, not a proof: a script gating its gift on another
+script's flag would read as "later" indefinitely.
+
 ## 1.1.0
 
 ### Fixed

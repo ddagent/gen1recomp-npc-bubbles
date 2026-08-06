@@ -145,6 +145,74 @@ do
   run.loader.modOptions.npc_bubbles = {}
 end
 
+-- ------- "come back later" vs "you already have it"
+--
+-- Both look like "the gift is unreachable" to the walker.  The difference
+-- is WHY: a claimed gift is blocked by the very flag the script set when it
+-- gave it to you, while a prerequisite is anything else.  Get this wrong in
+-- one direction and a taken gift bubbles forever; wrong in the other and
+-- the come-back-later marker never appears at all.
+
+local classify = run.loader.exports.npc_bubbles.classify
+
+do
+  -- self-guarded: check the flag it sets itself
+  local claimed = {
+    { "check_flag", "EVENT_GOT_TOWN_MAP" },
+    { "jump_if_true", 6 },
+    { "give_item", "TOWN_MAP" },
+    { "set_flag", "EVENT_GOT_TOWN_MAP" },
+    { "jump", 7 },
+    { "show_text", "use it well" },
+    { "show_text", "" },
+  }
+  flags = {}
+  T.eq(classify(claimed, game()), 1, "unclaimed and reachable: a solid !")
+
+  flags = { EVENT_GOT_TOWN_MAP = true }
+  -- no longer a gift, but their words still change with your progress, so
+  -- they drop to the smile rather than vanishing.  What matters is that
+  -- they do NOT stay a ! and do NOT become a come-back-later.
+  T.eq(classify(claimed, game()), 3,
+    "once claimed it falls to the smile, not a ! and not a later")
+end
+
+do
+  -- gated by a prerequisite the script never sets: come back later
+  local gated = {
+    { "check_item", "BIKE_VOUCHER" },
+    { "jump_if_false", 4 },
+    { "give_item", "BICYCLE" },
+    { "show_text", "come back with a voucher" },
+  }
+  flags = {}
+  T.eq(classify(gated, game({})), 4,
+    "a gift you cannot reach yet is the faded ! (tier 4)")
+  T.eq(classify(gated, game({ BIKE_VOUCHER = 1 })), 1,
+    "and becomes a solid ! the moment you can claim it")
+end
+
+do
+  -- an action available now outranks a gift that is not
+  local both = {
+    { "check_flag", "LATER" },
+    { "jump_if_false", 4 },
+    { "give_item", "PRIZE" },
+    { "set_flag", "SOMETHING_ELSE" },
+  }
+  flags = {}
+  T.eq(classify(both, game()), 2,
+    "a world change you can do now beats a gift you cannot")
+end
+
+do
+  -- no gift anywhere means no later marker, whatever else is true
+  T.eq(classify({ { "check_flag", "X" }, { "show_text", "hi" } }, game()), 3,
+    "reactive dialogue with no gift stays a smile")
+  T.eq(classify({ { "show_text", "hi" } }, game()), nil,
+    "and one fixed line is still nothing at all")
+end
+
 -- ------- closures are builders, not black boxes
 --
 -- A talk entry may be a function.  It is not opaque logic: it reads the

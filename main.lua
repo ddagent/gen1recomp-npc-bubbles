@@ -33,8 +33,16 @@ local CHANGES = {
 
 -- EXCLAMATION_BUBBLE, QUESTION_BUBBLE, SMILE_BUBBLE -- the three 16x16
 -- crops of the engine's own emote sheet, in sheet order.
-local BUBBLE = { 1, 2, 3 }
-local TIER_OPTION = { "gift", "event", "story" }
+--
+-- Tier 4 is "there is something here, but not yet": the same exclamation
+-- crop drawn faded.  A new symbol would have to be hand-drawn, and every
+-- icon drawn for these mods has lost to the engine's own art; reusing the
+-- ! at lower opacity says "the important kind of NPC, not active yet"
+-- without inventing anything.  It also reads as provisional, which suits a
+-- judgement that can occasionally be wrong.
+local BUBBLE = { 1, 2, 3, 1 }
+local ALPHA  = { 1, 1, 1, 0.45 }
+local TIER_OPTION = { "gift", "event", "story", "later" }
 
 -- The three commands that read your state.  A program containing one is
 -- one whose dialogue can differ depending on what you have done -- which is
@@ -50,6 +58,7 @@ return function(mod)
     { key = "gift", label = "GIFT BUBBLE", type = "toggle", default = true },
     { key = "event", label = "EVENT BUBBLE", type = "toggle", default = true },
     { key = "story", label = "STORY BUBBLE", type = "toggle", default = true },
+    { key = "later", label = "LATER BUBBLE", type = "toggle", default = true },
   })
 
   -- ------- reading the live state the branches ask about
@@ -129,6 +138,49 @@ return function(mod)
     return best
   end
 
+  -- Why a gift was not reachable -- which is the difference between "you
+  -- already have this" and "come back later", and the only reason a
+  -- come-back-later marker can exist without the stale bubbles returning.
+  --
+  -- A claimed gift is blocked by the very flag the script set when it gave
+  -- it to you: check_flag GOT_X guarding a path that ends set_flag GOT_X.
+  -- Anything else blocking it -- a happiness threshold, an item you do not
+  -- carry, a badge -- is a prerequisite, not a receipt.
+  --
+  -- It is a judgement, not a proof: a script gating its gift on someone
+  -- else's flag would read as "later" forever.  14 of the 29 gift programs
+  -- guard themselves this way and 15 are gated by something else, so both
+  -- halves are real rather than one being a rounding error.
+  local function giftOutlook(prog, game)
+    local hasGive, sets, checks = false, {}, {}
+    for _, row in ipairs(prog) do
+      if type(row) == "table" then
+        if GIVES[row[1]] then hasGive = true end
+        if row[1] == "set_flag" then sets[row[2]] = true end
+        if row[1] == "check_flag" then checks[row[2]] = true end
+      end
+    end
+    if not hasGive then return nil end
+    for name in pairs(sets) do
+      if checks[name] and condition("check_flag", name, game) then
+        return "done"
+      end
+    end
+    return "later"
+  end
+
+  -- The tier an NPC is worth right now, including the not-yet case.
+  local function classify(prog, game)
+    local tier = reachableTier(prog, game)
+    if tier == 1 or tier == 2 then return tier end
+    -- a gift that exists but is out of reach, and has not been claimed
+    if giftOutlook(prog, game) == "later" then return 4 end
+    return tier
+  end
+
+  mod.exports.classify = classify
+  mod.exports.giftOutlook = giftOutlook
+
   -- ------- what each NPC on this map is worth
   --
   -- Rebuilt on map entry (the NPC set changed) and on flag.changed (a
@@ -174,7 +226,7 @@ return function(mod)
       local key = npc.def and npc.def.text
       local prog = programFor(key and talk[key], game, npc)
       if prog then
-        tiers[npc.id] = reachableTier(prog, game)
+        tiers[npc.id] = classify(prog, game)
       elseif type(key and talk[key]) == "function" then
         opaque[map.id .. "/" .. tostring(key)] = true
       end
@@ -259,7 +311,7 @@ return function(mod)
     if not (image and quads and quads[BUBBLE[tier]]) then return end
     local g = love.graphics
     local r, gg, b, a = g.getColor()
-    g.setColor(1, 1, 1, 1)
+    g.setColor(1, 1, 1, ALPHA[tier] or 1)
     -- fxEmote's own offsets: SpriteRenderer puts the sprite's top at
     -- py - camY - 4, so -14 lands the bubble just above the head
     g.draw(image, quads[BUBBLE[tier]],
