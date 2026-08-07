@@ -471,10 +471,15 @@ do
   -- with the AA factor.  The third return is focusW/cw, a ratio off the
   -- camera matrix with no pixels in it, so it does NOT.
   local fakeDepth = 1
+  -- A point `wy` above the ground lands `wy * fakeMag` further up the
+  -- canvas, so fakeMag IS the magnification at this NPC's depth -- which is
+  -- what the mod measures by projecting the feet and a point a tile above
+  -- them.  A perspective camera makes that number grow as you approach.
+  local fakeMag = 4
   local fakeVoxel = {
     project = function(wx, wy, wz)
       projected[#projected + 1] = { wx = wx, wy = wy, wz = wz }
-      return 300, 200, fakeDepth
+      return 300, 200 - (wy or 0) * fakeMag, fakeDepth
     end,
   }
   local fakeAAFactor = 1
@@ -596,6 +601,64 @@ do
   end
 
   fakeAAFactor, fakeDepth = 1, 1
+
+  -- ------- standing among them, the bubble keeps pace with the NPC
+  --
+  -- Orbiting above, every NPC is about the same distance away and one flat
+  -- number is right.  On a free-cam rung an NPC a step away is many times
+  -- the size of one across the room: a screen-sized bubble offset a
+  -- screen-sized 30 pixels ends up by his feet, tiny.  So the size and the
+  -- offsets come from the magnification measured AT that NPC -- project the
+  -- feet, project a tile above them, and see how far apart they land.
+  fakeEngaged = true
+
+  fakeMag = 4                      -- same as the flat scale
+  local matched = drawOnce()
+  if matched then
+    T.eq(matched.s, 4, "where depth is uniform it agrees with the flat scale")
+    T.eq(matched.y, 200 - 30 * 4, "and so do the offsets")
+  end
+
+  fakeMag = 40                     -- an NPC a step in front of you
+  local close = drawOnce()
+  if close then
+    T.eq(close.s, 40, "up close the bubble grows with the NPC")
+    T.eq(close.x, 300 - 4 * 40, "the sideways offset grows with it")
+    T.eq(close.y, 200 - 30 * 40, "and it stays above the head, not by the feet")
+  end
+
+  fakeMag = 1                      -- across the room
+  local far = drawOnce()
+  if far then T.eq(far.s, 1, "far away it shrinks with him") end
+
+  -- a degenerate near-plane reading must not make it vanish or fill the
+  -- screen; the flat scale is the anchor for both bounds
+  fakeMag = 0
+  local degenerate = drawOnce()
+  if degenerate then T.eq(degenerate.s, 4, "a zero reading falls back to flat") end
+  fakeMag = 10000
+  local huge = drawOnce()
+  if huge then T.eq(huge.s, 4 * 16, "a runaway reading is clamped") end
+
+  -- first person AND anti-aliasing at once: the measurement is taken from
+  -- two supersampled projections, so it carries the factor and has to be
+  -- divided by it exactly like the position is
+  fakeAAFactor, fakeMag = 2, 40
+  local both = drawOnce()
+  if both then
+    T.eq(both.s, 20, "the measured scale is in resolved pixels, not big ones")
+    T.eq(both.y, 200 / 2 - 30 * 20, "and the offset follows it")
+  end
+  fakeAAFactor = 1
+
+  -- and the orbiting camera is left exactly as it was
+  fakeEngaged, fakeMag = false, 40
+  local orbit = drawOnce()
+  if orbit then
+    T.eq(orbit.s, 4, "orbiting, the flat scale is used however deep the NPC is")
+    T.eq(orbit.y, 200 - 30 * 4, "with the engine's own flat offsets")
+  end
+  fakeMag = 4
 
   -- ------- a wall does NOT hide the bubble, and that is deliberate
   --

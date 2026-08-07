@@ -544,7 +544,7 @@ return function(mod)
   end
   mod.exports.voxelOwner = voxelOwner
 
-  local voxel, aaLib, voxelTried = nil, nil, false
+  local voxel, aaLib, fpLib, voxelTried = nil, nil, nil, false
 
   local function voxel3D()
     if voxelTried then return voxel, aaLib end
@@ -568,7 +568,44 @@ return function(mod)
     if ok2 and type(aa) == "table" and type(aa.factor) == "function" then
       aaLib = aa
     end
+    -- Held as a module, not a value: which rung the player is on changes
+    -- while the game runs.
+    local ok3, fp = pcall(lib.require, "FirstPerson")
+    if ok3 and type(fp) == "table" and type(fp.engaged) == "function" then
+      fpLib = fp
+    end
     return voxel, aaLib
+  end
+
+  -- Whether the camera stands with the player rather than orbiting above.
+  -- On the free-cam rungs depth varies enormously across the screen -- an
+  -- NPC a step away is ten times the size of one across the room -- which
+  -- is the case the engine's flat scale was never meant to cover.
+  local function freeCam()
+    if not (fpLib and type(fpLib.engaged) == "function") then return false end
+    local ok, on = pcall(fpLib.engaged)
+    return ok and on == true
+  end
+
+  -- Canvas pixels per world pixel AT THIS NPC'S DEPTH, measured rather than
+  -- assumed: project the feet and a point one tile above them and see how
+  -- far apart they land.  That is the same magnification the arena drew the
+  -- NPC's own sprite at, so a bubble sized and offset by it keeps pace with
+  -- the NPC instead of staying screen-sized while he fills the view.
+  --
+  -- Not derived from project()'s third return.  That is focusW/cw, and in
+  -- first person the focus point IS the player, so focusW collapses towards
+  -- zero and the ratio takes every bubble down with it -- which is why
+  -- scaling by it made them smaller as you approached, not larger.
+  local function pixelsPerWorldPixel(v, npc, aaFactor, flat)
+    local _, fy = v.project(npc.px + 8, 0, npc.py + 16)
+    local _, hy = v.project(npc.px + 8, 16, npc.py + 16)
+    if not (fy and hy) then return flat end
+    local pps = math.abs(fy - hy) / 16 / (aaFactor > 0 and aaFactor or 1)
+    -- a degenerate near-plane reading must not produce an invisible or
+    -- screen-filling bubble
+    if not (pps > 0) then return flat end
+    return math.max(flat * 0.25, math.min(flat * 16, pps))
   end
 
   -- ------- keeping the pass out of START > OPTIONS
@@ -664,6 +701,8 @@ return function(mod)
       -- hoisted: these were being re-read per NPC per frame
       local on = { enabled(1), enabled(2), enabled(3), enabled(4) }
       local fade = alphaFor(4)
+      -- one rung check per frame, not one per NPC
+      local perspective = freeCam()
 
       for _, npc in ipairs(ow.npcs or {}) do
         local tier = tiers[npc.id]
@@ -700,17 +739,25 @@ return function(mod)
           -- the NPC.
           local sx, sy = v.project(npc.px + 8, 0, npc.py + 16)
           if sx and sy then
-            -- Only the position carries the AA factor; there is nothing
-            -- else left to correct now that the size is flat again.
             sx, sy = sx / aaFactor, sy / aaFactor
-            g.setColor(1, 1, 1, tier == 4 and fade or 1)
-            -- Unscaled by depth, deliberately.  The engine says it of its
+            -- Orbiting above, every NPC is about the same distance away, so
+            -- one flat number is right and is what the engine uses for its
             -- own field FX: "an effect keeps its crisp authored size and
-            -- only its anchor moves."  Scaling with distance made the
-            -- bubble tiny in first person and disagreed with the game's own
-            -- emote bubble standing next to it.
+            -- only its anchor moves."
+            --
+            -- Standing among them, that stops being true: one step away an
+            -- NPC is ten times the size of one across the room, and a
+            -- screen-sized bubble offset a screen-sized 30 pixels lands by
+            -- his feet rather than over his head.  So on the free-cam rungs
+            -- the offsets and the size come from the magnification measured
+            -- at that NPC, and the two agree wherever depth is uniform.
+            local s = scale
+            if perspective then
+              s = pixelsPerWorldPixel(v, npc, aaFactor, scale)
+            end
+            g.setColor(1, 1, 1, tier == 4 and fade or 1)
             g.draw(image, quads[BUBBLE[tier]],
-                   sx - 4 * scale, sy - 30 * scale, 0, scale, scale)
+                   sx - 4 * s, sy - 30 * s, 0, s, s)
           end
         end
       end

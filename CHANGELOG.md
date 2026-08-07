@@ -3,6 +3,31 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.8.0
+
+### Fixed
+
+- **Up close in first person the bubble shrank and sank to the floor.** The
+  size and the 30-pixel offset were both quoted in screen pixels, which is
+  right when the camera orbits above -- every NPC is about the same distance
+  away, and the engine uses one flat number for its own field effects for
+  exactly that reason. Standing among them it stops being true: an NPC a
+  step away is ten times the size of one across the room, so a screen-sized
+  bubble offset a screen-sized 30 pixels lands by his feet, tiny.
+- On the free-cam rungs the size and offsets now come from the
+  magnification **measured at that NPC**: project his feet, project a point
+  one tile above them, and see how far apart they land. That is the same
+  magnification the arena drew his sprite at, so the bubble keeps pace with
+  him. The orbiting camera is untouched, and where depth is uniform the two
+  agree.
+- This is not project()'s third return. That is `focusW/cw`, and in first
+  person the focus point IS the player, so `focusW` collapses towards zero
+  and takes every bubble down with it -- which is why an earlier attempt at
+  perspective scaling made them smaller as you approached rather than
+  larger.
+- Clamped either side of the flat scale so a near-plane reading cannot
+  produce an invisible or screen-filling bubble.
+
 ## 1.7.2
 
 ### Changed
