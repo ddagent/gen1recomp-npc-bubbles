@@ -413,6 +413,13 @@ return function(mod)
     return sheet
   end
 
+  -- the faded ! is the only tier drawn at less than full opacity
+  local function alphaFor(tier)
+    if tier ~= 4 then return 1 end
+    return math.max(0.2, math.min(1,
+      (tonumber(mod.options:get("later_fade")) or 75) / 100))
+  end
+
   local function enabled(tier)
     return mod.options:get(TIER_OPTION[tier]) == true
   end
@@ -435,12 +442,7 @@ return function(mod)
     if not (image and quads and quads[BUBBLE[tier]]) then return end
     local g = love.graphics
     local r, gg, b, a = g.getColor()
-    local alpha = 1
-    if tier == 4 then
-      alpha = math.max(0.2, math.min(1,
-        (tonumber(mod.options:get("later_fade")) or 75) / 100))
-    end
-    g.setColor(1, 1, 1, alpha)
+    g.setColor(1, 1, 1, alphaFor(tier))
     -- fxEmote's own offsets: SpriteRenderer puts the sprite's top at
     -- py - camY - 4, so -14 lands the bubble just above the head
     g.draw(image, quads[BUBBLE[tier]],
@@ -472,6 +474,93 @@ return function(mod)
   end
 
   mod.exports.drawFor = drawFor
+
+  -- ------- the voxel arena
+  --
+  -- DRAMATIC_SHAPE registers a render pipeline that supplies its own
+  -- drawWorld, and the engine skips the whole flat entity pass when a
+  -- pipeline renders the world:
+  --
+  --   if override then          -- the pipeline drew it
+  --   elseif not tilt then      -- ...so this never runs
+  --     for _, e in ipairs(self.entities) do e:draw(cam.x, cam.y) end
+  --
+  -- NPC.draw is inside that skipped branch, so the wrap above simply never
+  -- fires in voxel mode.  Nothing was wrong with it; the function it lives
+  -- in does not run.
+  --
+  -- The fix rides the same seam the engine's own "!" does there.  A
+  -- presentation-only pipeline (worldPresent, no drawWorld) folds over the
+  -- finished world image, and the voxel mod publishes what is needed to
+  -- place things in it: project() answers in canvas pixels, and
+  -- beginOverlay re-binds that canvas for ordinary 2D drawing.
+  --
+  -- The two paths cannot both fire.  worldPresent only runs when a pipeline
+  -- produced a world canvas, which is exactly when NPC.draw is skipped; in
+  -- flat mode there is no canvas and this pass is never called at all.
+  local voxel, voxelTried = nil, false
+
+  local function voxel3D()
+    if voxelTried then return voxel end
+    voxelTried = true
+    local handle = type(mod.find) == "function" and mod.find("DRAMATIC_SHAPE")
+    local lib = handle and handle.exports and handle.exports.lib
+    if not (lib and type(lib.require) == "function") then return nil end
+    local ok, v = pcall(lib.require, "Voxel3D")
+    if ok and type(v) == "table" and type(v.project) == "function"
+       and type(v.beginOverlay) == "function" then
+      voxel = v
+      mod.log:info("voxel arena detected; bubbles will be projected into it")
+    end
+    return voxel
+  end
+
+  mod.content.render_pipelines:register("npc_bubbles_overlay", {
+    label = "NPC BUBBLES 3D",
+    -- on unless the player turns it off; without this a pipeline restores
+    -- to level 0 and the pass would silently never run
+    default = 1,
+    worldPresent = function(canvas, ctx)
+      local v = voxel3D()
+      if not (v and canvas and ctx and tonumber(ctx.vw) and ctx.vw > 0) then
+        return canvas
+      end
+      if not next(tiers) then return canvas end
+      local ow = mod.world and mod.world:overworld()
+      local image = art(mod.world and mod.world.game)
+      if not (ow and image and quads) then return canvas end
+
+      -- canvas pixels per world pixel.  The voxel mod says this as
+      -- ctx.scale * AntiAlias.factor(), but the factor is internal to it --
+      -- and the canvas it handed back already carries both, so its width
+      -- against the world view width is the same number without reaching
+      -- for anything private.
+      local ok, w = pcall(canvas.getWidth, canvas)
+      if not (ok and w) then return canvas end
+      local scale = w / ctx.vw
+      if not (scale > 0) then return canvas end
+
+      if not v.beginOverlay() then return canvas end
+      local g = love.graphics
+      for _, npc in ipairs(ow.npcs or {}) do
+        local tier = tiers[npc.id]
+        if tier and enabled(tier) and quads[BUBBLE[tier]] then
+          -- anchor on the sprite's feet, the point the engine projects its
+          -- own emote from, then carry the flat layout's offset across:
+          -- the bubble sits 4 right and 30 above that anchor
+          local sx, sy = v.project(npc.px + 8, 0, npc.py + 16)
+          if sx and sy then
+            g.setColor(1, 1, 1, alphaFor(tier))
+            g.draw(image, quads[BUBBLE[tier]],
+                   sx - 4 * scale, sy - 30 * scale, 0, scale, scale)
+          end
+        end
+      end
+      g.setColor(1, 1, 1, 1)
+      if type(v.endOverlay) == "function" then pcall(v.endOverlay) end
+      return canvas
+    end,
+  })
 
   mod.events:on("game.ready", attach)
   mod.events:on("map.entered", attach)

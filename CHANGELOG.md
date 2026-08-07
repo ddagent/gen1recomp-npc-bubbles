@@ -3,6 +3,29 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.5.0
+
+### Fixed
+
+- **No bubbles at all in voxel mode.** DRAMATIC_SHAPE supplies its own
+  `drawWorld`, and the engine skips the entire flat entity pass when a
+  pipeline renders the world — `NPC.draw`, where the bubbles are drawn, sits
+  inside the skipped branch. Nothing was wrong with the drawing; the
+  function it lives in never ran.
+- The mod now also registers a presentation-only render pipeline
+  (`worldPresent`, no `drawWorld`) that folds over the finished world image
+  and projects each bubble into it, riding the same seam the engine's own
+  trainer `!` uses there. Position comes from the voxel mod's public
+  `project()`; the overlay canvas from its `beginOverlay()`.
+- The two paths cannot both fire: `worldPresent` only runs when a pipeline
+  produced a world canvas, which is exactly when `NPC.draw` is skipped.
+
+### Note
+
+Placement in the arena is derived from reading the voxel mod's source rather
+than from seeing it run. Position should be exact; the bubble's **size** is
+inferred from the canvas against the world view, and may need adjusting.
+
 ## 1.4.0
 
 ### Fixed

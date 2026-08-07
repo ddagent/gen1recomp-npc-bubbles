@@ -11,8 +11,28 @@ local T = require("tests.modkit")
 local Runtime = require("src.mods.Runtime")
 
 local Data = T.fixtures.fresh()
+
+-- The fixture carries no emote art, and the sheet is resolved once and
+-- remembered -- so this has to exist before ANY draw runs, or the first one
+-- caches "no sheet" and every later case silently draws nothing.
+Data.field = Data.field or {}
+Data.field.emotionBubbles = {
+  path = "fixture/emotes.png",
+  bubbles = { { x = 0, y = 0, w = 16, h = 16 },
+              { x = 16, y = 0, w = 16, h = 16 },
+              { x = 32, y = 0, w = 16, h = 16 } },
+}
+
 local run = T.sdk.loadMod("mods/npc_bubbles", { data = Data })
 T.eq(#run.errors, 0, "loads clean (" .. tostring(run.errors[1]) .. ")")
+
+-- mod.world and the emote sheet are each resolved once and remembered, so a
+-- live game has to be in place before ANY case touches them -- otherwise the
+-- first one caches "no world, no art" and every later case silently draws
+-- nothing, which is exactly the failure this file exists to catch.
+local liveOw = { isOverworld = true, map = { id = "PEWTER_CITY" }, npcs = {} }
+run.loader.game = { save = { flags = {} }, data = Data,
+                    stack = { states = { liveOw } } }
 
 local tierOf = run.loader.exports.npc_bubbles.reachableTier
 
@@ -416,6 +436,87 @@ do
   run.loader.modOptions.npc_bubbles = {}
 
   love.graphics.draw = realDraw
+end
+
+-- ------- the voxel arena
+--
+-- When a render pipeline supplies drawWorld, the engine skips the flat
+-- entity pass entirely -- so NPC.draw, and with it the wrap above, never
+-- runs. This presentation pass is the other half. Exactly one of them can
+-- fire: worldPresent only runs when a pipeline produced a world canvas,
+-- which is precisely when NPC.draw is skipped.
+--
+-- The voxel library is resolved once and remembered, so these cases run
+-- before anything else can cache a "not installed" answer.
+
+do
+  local pipe = Data.render_pipelines and Data.render_pipelines.npc_bubbles_overlay
+  T.check(pipe ~= nil, "a render pipeline is registered for the arena")
+  T.check(pipe and pipe.worldPresent ~= nil,
+    "it is presentation-only -- it must not claim to render the world")
+  T.eq(pipe and pipe.drawWorld, nil, "and supplies no drawWorld of its own")
+  T.eq(pipe and pipe.default, 1,
+    "on by default, or it would restore to level 0 and never run")
+
+  local projected, overlay = {}, { begun = 0, ended = 0 }
+  local fakeVoxel = {
+    project = function(wx, wy, wz)
+      projected[#projected + 1] = { wx = wx, wy = wy, wz = wz }
+      return 300, 200, 1
+    end,
+    beginOverlay = function() overlay.begun = overlay.begun + 1 return true end,
+    endOverlay = function() overlay.ended = overlay.ended + 1 end,
+  }
+  run.loader.mods.DRAMATIC_SHAPE =
+    { id = "DRAMATIC_SHAPE", enabled = true, failed = false,
+      manifest = { version = "1.5.5" } }
+  run.loader.exports.DRAMATIC_SHAPE =
+    { lib = { require = function(n)
+        T.eq(n, "Voxel3D", "it asks the voxel lib for Voxel3D by name")
+        return fakeVoxel
+      end } }
+
+  local npc = { id = "vox1", px = 160, py = 96 }
+  liveOw.npcs = { npc }
+  local tiers = run.loader.exports.npc_bubbles.tiers()
+  tiers[npc.id] = 1
+
+  local drew = {}
+  local realDraw = love.graphics.draw
+  love.graphics.draw = function(_, _, x, y, _, sx)
+    drew[#drew + 1] = { x = x, y = y, s = sx }
+  end
+
+  local canvas = { getWidth = function() return 640 end }
+  local out = pipe.worldPresent(canvas, { vw = 160 })
+  love.graphics.draw = realDraw
+
+  T.eq(out, canvas, "the canvas is returned so the fold continues")
+  T.eq(overlay.begun, 1, "the arena's overlay is opened once")
+  T.eq(overlay.ended, 1, "and closed again -- a left-open canvas eats the frame")
+  T.eq(#projected, 1, "the NPC's world point is projected")
+  if projected[1] then
+    -- the engine anchors its own emote on the sprite's feet: px+8, py+16
+    T.eq(projected[1].wx, 168, "anchored on the sprite's feet across")
+    T.eq(projected[1].wz, 112, "and along -- project takes (x, height, z)")
+    T.eq(projected[1].wy, 0, "at ground height")
+  end
+  if drew[1] then
+    -- 640 canvas px / 160 world px = 4 canvas px per world px
+    T.eq(drew[1].s, 4, "scale comes from the canvas against the world view")
+    T.eq(drew[1].x, 300 - 4 * 4, "and the flat layout's offset is carried over")
+    T.eq(drew[1].y, 200 - 30 * 4, "so it sits above the head, not on the feet")
+  end
+
+  -- a malformed context must not reach the overlay at all
+  local before = overlay.begun
+  T.eq(pipe.worldPresent(canvas, {}), canvas, "no world width: pass through")
+  T.eq(pipe.worldPresent(nil, { vw = 160 }), nil, "no canvas: nothing to fold")
+  T.eq(overlay.begun, before, "and neither opened the overlay")
+
+  liveOw.npcs = {}
+  run.loader.mods.DRAMATIC_SHAPE = nil
+  run.loader.exports.DRAMATIC_SHAPE = nil
 end
 
 run.release()
