@@ -488,6 +488,13 @@ do
   -- with the player and a sight line from the player is the camera's own
   local fakeEngaged = false
   local fakeFP = { engaged = function() return fakeEngaged end }
+  -- the arena's per-tile height field: tile id -> how tall the world is
+  -- there.  wall is 16, roof 28, a fence only 10.
+  local tileHeights = {}
+  local fakeTS = {
+    forMap = function() return { fixture = true } end,
+    at = function(_, _, tile) return { h = tileHeights[tile] or 0 } end,
+  }
   -- T-SHIFT is a worldPresent pipeline too, at a higher priority, and it
   -- hands on a NEW blurred canvas.  So the bubbles must go onto whichever
   -- canvas we are given, and the previous target must be restored.
@@ -501,6 +508,7 @@ do
     { lib = { require = function(n)
         if n == "AntiAlias" then return fakeAA end
         if n == "FirstPerson" then return fakeFP end
+        if n == "TileShape" then return fakeTS end
         T.eq(n, "Voxel3D", "it asks the voxel lib for Voxel3D by name")
         return fakeVoxel
       end } }
@@ -660,23 +668,70 @@ do
   end
   fakeMag = 4
 
-  -- ------- a wall does NOT hide the bubble, and that is deliberate
+  -- ------- a roof hides the bubble; a fence does not
   --
-  -- There is no depth test to be had here: the depth buffer lives only
-  -- while the voxel mod's own pass is open and no pipeline hook runs inside
-  -- it.  A sight line walked over the tile grid was tried and removed --
-  -- it clipped wall corners and signposts and blinked bubbles out while
-  -- you walked.  The arena's own emote bubbles draw through walls too, so
-  -- this now matches the game standing next to it.
-  npc.cellX, npc.cellY = 10, 6
-  liveOw.player = { cellX = 6, cellY = 6 }
-  liveOw.map = {
-    isWalkableCell = function() return false end,
-    isWaterCell = function() return false end,
-  }
-  T.check(drawOnce() ~= nil,
-    "a wall in the way does not hide the bubble, like the engine's emote")
-  liveOw.map, liveOw.player = nil, nil
+  -- The arena leaves NPCs to honest occlusion -- only the player gets a
+  -- see-through silhouette -- so a bubble floating over a roof whose NPC is
+  -- correctly hidden is wrong.  There is no depth buffer to consult from
+  -- here, so the line from the eye to the NPC's head is walked against the
+  -- arena's own per-tile height field.  Being a height field and not a
+  -- boolean is the point: you see over a fence and not through a wall.
+  do
+    -- eye at x=0, z=0, 32 above the ground; NPC 12 tiles east at ground
+    -- level, so the sight line sags from 32 down to his head at 16
+    fakeVoxel.eye = { 0, 32, 0 }
+    npc.px, npc.py = 96 - 8, 0 - 16   -- head lands at (96, 16, 0)
+    liveOw.map = {
+      tileAt = function(_, tx, ty) return tx .. "," .. ty end,
+    }
+    fakeEngaged = true
+
+    -- off by default: it reads tile heights rather than the depth buffer, so
+    -- it is an approximation, and one nobody asked for should be opt-in
+    tileHeights = { ["6,0"] = 32 }
+    run.loader.modOptions.npc_bubbles = {}
+    T.check(drawOnce() ~= nil, "off by default, a roof hides nothing")
+    run.loader.modOptions.npc_bubbles = { hide_walls = true }
+
+    tileHeights = {}
+    T.check(drawOnce() ~= nil, "open ground: the bubble shows")
+
+    -- a wall 16 tall halfway along, where the line is about 24 up
+    tileHeights["6,0"] = 16
+    T.check(drawOnce() ~= nil, "a low wall the line clears does not hide it")
+
+    -- a roof at 28 in the same place does reach the line
+    tileHeights["6,0"] = 28
+    T.check(drawOnce() == nil, "a roof standing in the way hides it")
+
+    -- ...and the same roof means nothing on the orbiting camera, which
+    -- looks over the town by design
+    fakeEngaged = false
+    T.check(drawOnce() ~= nil, "orbiting above, nothing is ever hidden")
+    fakeEngaged = true
+
+    -- the NPC's own tile is the end of the line, not an obstacle on it
+    -- his head is at x=96, which is tile 12; the walk stops short of it
+    tileHeights = { ["12,0"] = 32 }
+    T.check(drawOnce() ~= nil, "the NPC's own tile does not hide him")
+
+    -- fail open: no height field at all (another arena) means no hiding
+    tileHeights = { ["6,0"] = 32 }
+    local realTS = fakeTS.forMap
+    fakeTS.forMap = function() error("no shapes here") end
+    T.check(drawOnce() ~= nil, "a throwing height field fails open")
+    fakeTS.forMap = realTS
+
+    -- and a map that cannot answer at all
+    liveOw.map = {}
+    T.check(drawOnce() ~= nil, "a map with no tileAt fails open")
+
+    liveOw.map, fakeVoxel.eye = nil, nil
+    tileHeights = {}
+    fakeEngaged = false
+    npc.px, npc.py = 160, 96
+    run.loader.modOptions.npc_bubbles = {}
+  end
 
   -- a malformed context must not reach the overlay at all
   local before = #bound
@@ -710,7 +765,121 @@ do
     -- and nothing else is collateral: another mod's rows have to survive
     T.check(ids["tilt"] and ids["pipeline:voxel"] and ids["pipeline:tiltshift"],
       "every other row is left exactly where it was")
-    T.eq(#out, #incoming - 1, "exactly one row removed")
+
+    -- the same hook adds the guide: a word can only ever say "SMILE", so the
+    -- guide shows the crops themselves
+    T.check(ids["npc_bubbles_guide"], "and a guide row is added in its place")
+    T.eq(#out, #incoming, "one row out, one row in")
+    local guide
+    for _, row in ipairs(out) do
+      if row.id == "npc_bubbles_guide" then guide = row end
+    end
+    T.check(type(guide.activate) == "function", "the guide row opens something")
+    T.check(Data.screens and Data.screens.npc_bubbles_guide ~= nil,
+      "and the screen it opens is registered")
+  end
+
+  -- ------- the toggles name the symbol they switch
+  --
+  -- No legend row: a row stepping through four sentences to say what a
+  -- picture says at a glance competed with the guide rather than helping.
+  do
+    local schema = run.loader.optionSchemas
+      and run.loader.optionSchemas.npc_bubbles
+    if type(schema) == "table" then
+      local labels = {}
+      for _, row in ipairs(schema) do
+        labels[row.key] = row.label
+        T.check(row.key ~= "legend", "the text legend is gone")
+      end
+      T.eq(labels.gift, "! BUBBLE", "the gift toggle names its symbol")
+      T.eq(labels.later, "FADED ! BUBBLE", "and so does the faded one")
+      T.eq(labels.event, "? BUBBLE", "and the question one")
+      T.eq(labels.story, "SMILE BUBBLE", "and the smile")
+      for _, row in ipairs(schema) do
+        T.check(#tostring(row.label) <= 17,
+          "'" .. tostring(row.label) .. "' fits the label line")
+      end
+    else
+      T.check(true, "option schema not exposed by the loader in this build")
+    end
+  end
+
+  -- ------- the guide draws every bubble it explains
+  do
+    local Screens2 = require("src.ui.Screens")
+    Screens2.invalidate()
+    local factory = Data.screens.npc_bubbles_guide
+    local made, inst = pcall(function()
+      local f = type(factory) == "table" and factory.new or factory
+      return f(run.loader.game)
+    end)
+    T.check(made and inst, "the guide screen constructs (" .. tostring(inst) .. ")")
+    if made and inst then
+      local drew = {}
+      local realDraw = love.graphics.draw
+      love.graphics.draw = function(_, q) drew[#drew + 1] = q end
+      local ok, err = pcall(inst.draw, inst)
+      love.graphics.draw = realDraw
+      T.check(ok, "and draws: " .. tostring(err))
+      T.check(#drew > 0, "with the real crops, not words for them")
+
+      -- Wrapped, so nothing runs through the right border: the box's inside
+      -- edge is x=152 and the text starts at x=40, which is 14 characters.
+      for _, entry in ipairs(inst.entries) do
+        for _, line in ipairs(entry.lines) do
+          T.check(#line <= 14,
+            "'" .. line .. "' fits inside the border")
+        end
+      end
+
+      -- and wrapping means it no longer fits on one screen, so it scrolls
+      T.check(inst:maxScroll() > 0, "there is more than one screenful")
+      local first = #drew
+      inst.scroll = inst:maxScroll()
+      drew = {}
+      love.graphics.draw = function(_, q) drew[#drew + 1] = q end
+      pcall(inst.draw, inst)
+      love.graphics.draw = realDraw
+      T.check(#drew > 0, "the bottom of the list draws once scrolled to")
+
+      -- scrolling is clamped at both ends
+      inst.scroll = 0
+      inst.game = { input = { wasPressed = function(_, b) return b == "up" end },
+                    stack = { pop = function() end } }
+      inst:update()
+      T.eq(inst.scroll, 0, "UP at the top does not scroll past it")
+      inst.scroll = inst:maxScroll()
+      inst.game.input.wasPressed = function(_, b) return b == "down" end
+      inst:update()
+      T.eq(inst.scroll, inst:maxScroll(), "and DOWN at the end stays put")
+
+      -- The screen has to answer with its OWN palette.  Game.lua walks down
+      -- the stack for the first screen that does, so a screen with none
+      -- wears whatever was underneath it -- which is how the faded ! came
+      -- out in the overworld's purple.
+      T.check(type(inst.sgbPalettes) == "function",
+        "the guide names its own palette rather than inheriting one")
+
+      -- and the faded bubble is exempted from the recolour, because a
+      -- 75%-alpha blend falls between the four DMG shades and the palette
+      -- pass has to round it to one of them
+      local marked = 0
+      local PaletteFX = require("src.render.PaletteFX")
+      local realMark = PaletteFX.markTrueColor
+      PaletteFX.markTrueColor = function() marked = marked + 1 end
+      inst.scroll = 0
+      pcall(inst.draw, inst)
+      PaletteFX.markTrueColor = realMark
+      T.check(marked > 0, "every bubble drawn is exempted from the recolour")
+
+      -- and it can be closed
+      local popped = false
+      inst.game = { input = { wasPressed = function(_, b) return b == "b" end },
+                    stack = { pop = function() popped = true end } }
+      inst:update()
+      T.check(popped, "B closes it")
+    end
   end
 
   -- ------- the arena is found by what it OWNS, not by its name

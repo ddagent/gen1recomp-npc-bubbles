@@ -17,6 +17,8 @@
 -- the map, because in both cases the give_item is unreachable.
 
 local MapScripts = require("src.script.MapScripts")
+-- only the guide screen needs this; the bubbles themselves are sprite draws
+local Font = require("src.render.Font")
 
 -- Tier 1: you receive something.
 local GIVES = {
@@ -62,16 +64,39 @@ local MAX_STEPS = 400
 
 return function(mod)
   mod.options:define({
-    { key = "gift", label = "GIFT BUBBLE", type = "toggle", default = true },
-    { key = "event", label = "EVENT BUBBLE", type = "toggle", default = true },
-    { key = "story", label = "STORY BUBBLE", type = "toggle", default = true },
-    { key = "later", label = "LATER BUBBLE", type = "toggle", default = true },
+    -- The labels ARE the legend.  There is one toggle per bubble already, so
+    -- naming each after what its symbol means turns the settings screen into
+    -- the reminder -- on the very screen someone is already looking at to
+    -- switch one off.  A row is a full-width box with the name on one line
+    -- and the value beneath it, so there is room for about 17 characters.
+    -- Named for the symbol they switch, and in the order the two exclamation
+    -- marks belong together, so the faded one is read against the solid one.
+    --
+    -- No legend row here.  A row that steps through four sentences to say
+    -- what a picture says at a glance was competing with the guide rather
+    -- than helping it, and the guide can show the faded ! actually faded.
+    -- SMILE is a word because the charmap has no smiley -- it carries
+    -- ! ? ( ) [ ] : - and no more -- which is the whole argument for a
+    -- screen that can draw the crop instead of naming it.
+    { key = "gift", label = "! BUBBLE", type = "toggle", default = true },
+    { key = "later", label = "FADED ! BUBBLE", type = "toggle", default = true },
+    { key = "event", label = "? BUBBLE", type = "toggle", default = true },
+    { key = "story", label = "SMILE BUBBLE", type = "toggle", default = true },
     -- How solid the come-back-later ! is, as a percent.  It has to read as
     -- subordinate to a real one without disappearing into the tilework --
     -- and where that line sits depends on the renderer you use and how
     -- bright the ground is, so it is a dial rather than a constant.  Read
     -- at draw time, so it moves as you turn it.
-    { key = "later_fade", label = "LATER FADE %", type = "number",
+    -- No % in the label: the Game Boy charmap has no glyph for one, so it
+    -- has been printing as a blank gap ever since this option existed.
+    -- Off by default.  It reads the arena's tile heights rather than its
+    -- depth buffer, which cannot be reached from a mod, so it is right about
+    -- walls and roofs and wrong about the props built from rules.  An
+    -- approximation nobody asked for should not be the default; one someone
+    -- can switch on is fine.  Only does anything on the free-cam rungs.
+    { key = "hide_walls", label = "HIDDEN BY WALLS", type = "toggle",
+      default = false },
+    { key = "later_fade", label = "LATER FADE", type = "number",
       default = 75, min = 20, max = 100, step = 5 },
   })
 
@@ -544,7 +569,7 @@ return function(mod)
   end
   mod.exports.voxelOwner = voxelOwner
 
-  local voxel, aaLib, fpLib, voxelTried = nil, nil, nil, false
+  local voxel, aaLib, fpLib, tileShape, voxelTried = nil, nil, nil, nil, false
 
   local function voxel3D()
     if voxelTried then return voxel, aaLib end
@@ -574,7 +599,76 @@ return function(mod)
     if ok3 and type(fp) == "table" and type(fp.engaged) == "function" then
       fpLib = fp
     end
+    -- The arena's own per-tile height field, which is what its mesher builds
+    -- the visible world from: wall 16, roof 28, tree 16, canopy 32, cliff 32,
+    -- fence 10, ledge 6.  Standing in for a depth test we cannot have -- the
+    -- depth buffer exists only while the arena's pass is open and no pipeline
+    -- hook runs there.  Absent on any other arena, and then nothing hides.
+    local ok4, ts = pcall(lib.require, "TileShape")
+    if ok4 and type(ts) == "table" and type(ts.forMap) == "function"
+      and type(ts.at) == "function" then
+      tileShape = ts
+    end
     return voxel, aaLib
+  end
+
+  -- ------- what stands between the camera and an NPC
+  --
+  -- The arena leaves NPCs to honest occlusion -- only the player gets a
+  -- see-through silhouette -- so a bubble over a roof whose NPC is correctly
+  -- hidden is wrong.  This walks the line from the eye to the NPC's head and
+  -- asks the height field whether anything along it is taller than the line
+  -- is at that point.
+  --
+  -- Approximate by construction: props the arena builds from rules (shelves,
+  -- figures, cylinders) are not in the tile heights, so it will disagree in
+  -- places.  Every uncertainty therefore fails OPEN -- no library, no map, a
+  -- throw, anything -- because a bubble that shows when it should not is the
+  -- lesser fault of the two, and the one this mod already had.
+  local TILE = 8            -- world pixels per tile (a cell is two)
+  local STEP = 4            -- half a tile: cannot step over a wall
+  local MAX_STEPS = 160
+
+  local function heightAt(map, shapes, tx, ty)
+    local ok, tile = pcall(map.tileAt, map, tx, ty)
+    if not (ok and tile) then return 0 end
+    local got, s = pcall(tileShape.at, map, shapes, tile, tx, ty)
+    if not (got and type(s) == "table") then return 0 end
+    return tonumber(s.h) or 0
+  end
+
+  local function sightBlocked(v, ow, npc)
+    if not tileShape then return false end
+    local map = ow and ow.map
+    if not (map and type(map.tileAt) == "function") then return false end
+    local eye = v.eye
+    if type(eye) ~= "table" or not (eye[1] and eye[2] and eye[3]) then
+      return false
+    end
+    local okS, shapes = pcall(tileShape.forMap, map)
+    if not (okS and type(shapes) == "table") then return false end
+
+    -- the head, not the bubble: then it hides exactly when his sprite does
+    local hx, hy, hz = npc.px + 8, 16, npc.py + 16
+    local dx, dy, dz = hx - eye[1], hy - eye[2], hz - eye[3]
+    local dist = math.sqrt(dx * dx + dz * dz)
+    if not (dist > TILE) then return false end
+    local steps = math.min(MAX_STEPS, math.floor(dist / STEP))
+    if steps < 2 then return false end
+
+    local lastTx, lastTy = nil, nil
+    -- open interval: the camera's own tile and the NPC's own tile are the
+    -- ends of the line, never obstacles on it
+    for i = 1, steps - 1 do
+      local t = i / steps
+      local x, y, z = eye[1] + dx * t, eye[2] + dy * t, eye[3] + dz * t
+      local tx, ty = math.floor(x / TILE), math.floor(z / TILE)
+      if tx ~= lastTx or ty ~= lastTy then
+        lastTx, lastTy = tx, ty
+        if heightAt(map, shapes, tx, ty) > y then return true end
+      end
+    end
+    return false
   end
 
   -- Whether the camera stands with the player rather than orbiting above.
@@ -623,6 +717,160 @@ return function(mod)
   local PIPELINE_ID = "npc_bubbles_overlay"
   local ROW_ID = "pipeline:" .. PIPELINE_ID
 
+  -- ------- the guide
+  --
+  -- Words can only ever say "SMILE".  The question people actually have is
+  -- "what did the faded one look like again?", and the honest answer to that
+  -- is the picture -- which the mod is already holding, since it draws these
+  -- four crops over NPCs all day.
+  local GUIDE_SCREEN = "npc_bubbles_guide"
+  -- Wrapped, so the words are not rationed to whatever fits one line.  The
+  -- box's inside edge is x=152 and the text starts at x=40, which is 14
+  -- characters -- "SAYS MORE LATER" was 15 and ran through the border.
+  local GUIDE_COLS = 14
+  -- The wording from the mod's own description, rather than a shorter
+  -- paraphrase invented to fit one line.  Sentence case, like the POKeDEX
+  -- entries: this is prose, and the game only shouts at menu labels.
+  --
+  -- Ordered the way the two exclamation marks belong together, so the faded
+  -- one is read against the solid one rather than three rows away.
+  local GUIDE = {
+    { tier = 1, text = "Something for you right now" },
+    { tier = 4, text = "Something here later" },
+    { tier = 2, text = "Talking to them changes the world" },
+    { tier = 3, text = "They'll say new things as you progress" },
+  }
+
+  local function wrapWords(text, cols)
+    local lines, line = {}, ""
+    for word in tostring(text):gmatch("%S+") do
+      local try = line == "" and word or (line .. " " .. word)
+      if #try <= cols then
+        line = try
+      else
+        if line ~= "" then lines[#lines + 1] = line end
+        line = word
+      end
+    end
+    if line ~= "" then lines[#lines + 1] = line end
+    return lines
+  end
+
+  local Guide = {}
+  Guide.__index = Guide
+  Guide.isOpaque = true
+
+  -- The box border sits on the outer tile, so the inside is x 8..152 and
+  -- y 8..136.  Everything here is measured off that rather than the screen,
+  -- which is how the first cut printed through both the right and the
+  -- bottom edge.
+  local G_TOP, G_BOTTOM = 38, 118    -- the scrolling window
+  local G_ROW = 10                   -- a line of text
+  local G_ENTRY_GAP = 6
+
+  -- Without this the screen inherits whatever palette the thing underneath
+  -- it left set (Game.lua walks DOWN the stack for the first screen that
+  -- answers), which is why the guide wore the overworld's colours.  The
+  -- generic whole-screen palette is what the engine's own list menus use.
+  function Guide:sgbPalettes(game)
+    local ok, P = pcall(require, "src.render.PaletteFX")
+    if not (ok and P and P.wholeNamed) then return nil end
+    local got, pal = pcall(P.wholeNamed, game.data, "MEWMON")
+    return got and pal or nil
+  end
+
+  function Guide.new(game)
+    local self = setmetatable({ game = game, scroll = 0 }, Guide)
+    -- laid out once: each entry is its bubble and however many lines its
+    -- description wraps to
+    self.entries = {}
+    local y = 0
+    for _, row in ipairs(GUIDE) do
+      local lines = wrapWords(row.text, GUIDE_COLS)
+      local height = math.max(16, #lines * G_ROW)
+      self.entries[#self.entries + 1] =
+        { tier = row.tier, lines = lines, y = y, height = height }
+      y = y + height + G_ENTRY_GAP
+    end
+    self.contentHeight = math.max(0, y - G_ENTRY_GAP)
+    return self
+  end
+
+  function Guide:maxScroll()
+    return math.max(0, self.contentHeight - (G_BOTTOM - G_TOP))
+  end
+
+  function Guide:update()
+    local input = self.game and self.game.input
+    if not input then return end
+    if input:wasPressed("down") then
+      self.scroll = math.min(self:maxScroll(), self.scroll + G_ROW)
+      return
+    elseif input:wasPressed("up") then
+      self.scroll = math.max(0, self.scroll - G_ROW)
+      return
+    end
+    -- any of the three ways out of a page in this game
+    if input:wasPressed("b") or input:wasPressed("a")
+      or input:wasPressed("start") then
+      self.game.stack:pop()
+    end
+  end
+
+  function Guide:draw()
+    local g = love.graphics
+    g.setColor(1, 1, 1, 1)
+    g.rectangle("fill", 0, 0, 160, 144)
+    g.setColor(0, 0, 0, 1)
+    Font.drawBox(0, 0, 20, 18)
+    Font.draw("NPC BUBBLES", 16, 16)
+    g.rectangle("fill", 8, 30, 144, 1)
+
+    local image = art(self.game)
+    -- clipped to the window, so a half-scrolled entry is cut cleanly at the
+    -- edge instead of drawing over the border
+    g.setScissor(8, G_TOP, 144, G_BOTTOM - G_TOP)
+    for _, entry in ipairs(self.entries) do
+      local y = G_TOP + entry.y - self.scroll
+      if y < G_BOTTOM and y + entry.height > G_TOP then
+        -- the real crop, at the size it is drawn in the world, so the faded
+        -- one is recognisable as the faded one
+        if image and quads and quads[BUBBLE[entry.tier]] then
+          g.setColor(1, 1, 1, alphaFor(entry.tier))
+          g.draw(image, quads[BUBBLE[entry.tier]], 16, y)
+          -- Exempt from the SGB recolour, the way DexEntryMenu exempts a
+          -- full-colour pic.  A 75%-alpha blend lands BETWEEN the four DMG
+          -- shades, and the palette pass has to round it to one of them --
+          -- which is how the faded ! came out purple instead of faded.
+          -- Marked, the blended pixels survive as themselves and it reads
+          -- as what it is.
+          pcall(function()
+            require("src.render.PaletteFX").markTrueColor(16, y, 16, 16)
+          end)
+          g.setColor(0, 0, 0, 1)
+        end
+        for i, line in ipairs(entry.lines) do
+          Font.draw(line, 40, y + (i - 1) * G_ROW)
+        end
+      end
+    end
+    g.setScissor()
+
+    -- the arrows are the game's own, and only appear when there is more
+    if self:maxScroll() > 0 then
+      if self.scroll > 0 then Font.draw("▲", 144, G_TOP) end
+      if self.scroll < self:maxScroll() then
+        Font.draw("▼", 144, G_BOTTOM - 8)
+      end
+    end
+
+    -- inside the border, not through it: the bottom edge is y=136
+    Font.draw("B TO GO BACK", 16, 122)
+    g.setColor(1, 1, 1, 1)
+  end
+
+  mod.content.screens:register(GUIDE_SCREEN, { new = Guide.new })
+
   mod.hooks:wrap("ui.options.rows", function(nextFn, game, rows)
     local out = nextFn(game, rows)
     if type(out) ~= "table" then return out end
@@ -630,6 +878,19 @@ return function(mod)
     for _, row in ipairs(out) do
       if row.id ~= ROW_ID then kept[#kept + 1] = row end
     end
+    -- the same hook that hides the pipeline row adds the guide: one entry in
+    -- START > OPTIONS, opened with A
+    kept[#kept + 1] = {
+      id = "npc_bubbles_guide",
+      label = "NPC BUBBLES",
+      value = function() return "GUIDE" end,
+      activate = function(g)
+        local ok, Screens = pcall(require, "src.ui.Screens")
+        if ok and Screens and Screens.push then
+          pcall(Screens.push, g, GUIDE_SCREEN)
+        end
+      end,
+    }
     return kept
   end)
 
@@ -703,10 +964,15 @@ return function(mod)
       local fade = alphaFor(4)
       -- one rung check per frame, not one per NPC
       local perspective = freeCam()
+      -- Only where the camera stands with the player -- orbiting above it
+      -- looks over walls on purpose -- and only when asked for.
+      local hideBehind = perspective
+        and mod.options:get("hide_walls") == true
 
       for _, npc in ipairs(ow.npcs or {}) do
         local tier = tiers[npc.id]
-        if tier and on[tier] and quads[BUBBLE[tier]] then
+        if tier and on[tier] and quads[BUBBLE[tier]]
+          and not (hideBehind and sightBlocked(v, ow, npc)) then
           -- project() returns canvas x, canvas y, and a depth-scale: how
           -- much the perspective camera magnifies this point (close NPCs
           -- are large, far ones small).  That depth value is what makes

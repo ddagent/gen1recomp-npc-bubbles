@@ -3,6 +3,37 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.9.0
+
+### Added
+
+- **A guide**, in START > OPTIONS under `NPC BUBBLES`. It draws the four
+  bubbles themselves -- the real crops from the emote sheet, at the size
+  they appear over an NPC, with the faded one drawn at whatever your
+  `LATER FADE` is set to. Words can say "SMILE"; only a picture answers
+  "what did the faded one look like again". Wraps and scrolls.
+- `HIDDEN BY WALLS`, off by default: on the first- and third-person rungs, a
+  bubble whose NPC is behind a roof is hidden with him. The arena leaves
+  NPCs to honest occlusion -- only the player gets a see-through silhouette
+  -- so a bubble over a roof whose NPC is correctly hidden was wrong.
+- It reads the arena's own per-tile height field, which is why a fence at 10
+  hides nothing and a roof at 28 does. A real depth test is not reachable
+  from a mod: the depth buffer exists only while the arena's pass is open
+  and no pipeline hook runs inside it. So it is an approximation, it is off
+  unless asked for, and every uncertainty draws the bubble.
+
+### Changed
+
+- The toggles name the symbol they switch -- `! BUBBLE`, `FADED ! BUBBLE`,
+  `? BUBBLE`, `SMILE BUBBLE` -- with the two exclamation marks together, so
+  the faded one is read against the solid one.
+
+### Fixed
+
+- `LATER FADE %` had a `%` in it, which the Game Boy charmap has no glyph
+  for, so it has been printing as a blank gap ever since the option
+  existed. It is `LATER FADE` now.
+
 ## 1.8.0
 
 ### Fixed
