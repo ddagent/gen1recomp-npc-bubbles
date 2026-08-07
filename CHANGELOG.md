@@ -3,6 +3,14 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.6.1
+
+### Changed
+
+- Rewrote the description shown in the mod manager. It predated the faded
+  `!`, so one of the four symbols was not mentioned at all, and the smile
+  was described by what it means rather than what to do about it.
+
 ## 1.6.0
 
 ### Fixed

@@ -1,7 +1,7 @@
 {
   "id": "npc_bubbles",
   "name": "NPC Bubbles",
-  "version": "1.6.0",
+  "version": "1.6.1",
   "api": 2,
   "entry": "main.lua",
   "profile": "content",
@@ -13,7 +13,7 @@
   "conflicts": [],
   "incompatible": [],
   "experimental": false,
-  "description": "Put a bubble over NPCs who actually do something: a ! for a gift, a ? for an event, a smile for story dialogue.",
+  "description": "Marks NPCs worth talking to. A solid ! means they have something for you right now. A faded ! means they will later, but not yet. A ? means talking to them changes something in the world. A smile means they say different things as you progress, so they are worth another word later on. Each type can be turned off.",
   "permissions": [
     "engine_internals"
   ],
