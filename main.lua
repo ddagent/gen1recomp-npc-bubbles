@@ -277,6 +277,11 @@ return function(mod)
   -- ends.
 
   local tiers = {}          -- npc.id -> tier
+  -- A script that sets three flags fires flag.changed three times, and a
+  -- rebuild walks every NPC's program.  Mark and settle once instead: the
+  -- draw asks for freshness, so at worst it costs one rebuild per frame and
+  -- usually none.
+  local dirty = false
   local opaque = {}         -- text ids whose talk entry is a function
   local reported = false
 
@@ -306,14 +311,29 @@ return function(mod)
     return out
   end
 
+  -- One copy per rebuild, not one per NPC.  The copy is the expensive part
+  -- -- a save carries the party, the boxes, the bag and every flag -- and a
+  -- map with several closure NPCs was paying for it once each, on every
+  -- flag change.  Reusing it means a builder could in principle see another
+  -- builder's discarded writes; that can only mis-tier one bubble, and it
+  -- buys turning N deep copies into one.
+  -- Keyed on the game it was made from: within one rebuild that is the same
+  -- object with the same save, so reuse is free.  A different game -- or a
+  -- new rebuild, which clears it -- gets a fresh copy, so a cached sandbox
+  -- can never answer for state it was not built from.
+  local sandboxCache, sandboxFor = nil, nil
+
   local function sandbox(game)
     if not game then return nil end
+    if sandboxCache and sandboxFor == game then return sandboxCache end
     local noop = function() end
-    return setmetatable({
+    sandboxFor = game
+    sandboxCache = setmetatable({
       __sandboxed = true,
       save = copy(game.save),
       stack = { push = noop, pop = noop, top = noop, states = {} },
     }, { __index = game })
+    return sandboxCache
   end
 
   function programFor(prog, game, npc)
@@ -331,6 +351,8 @@ return function(mod)
   end
 
   local function rebuild()
+    sandboxCache, sandboxFor = nil, nil   -- the save moved; the copy is stale
+    dirty = false
     tiers = {}
     local game = mod.world and mod.world.game
     local ow = mod.world and mod.world:overworld()
@@ -357,9 +379,15 @@ return function(mod)
     end
   end
 
+  local function ensureFresh()
+    if dirty then rebuild() end
+  end
+
+  local function markDirty() dirty = true end
+
   mod.events:on("map.entered", rebuild)
   mod.events:on("map.reloaded", rebuild)
-  mod.events:on("flag.changed", rebuild)
+  mod.events:on("flag.changed", markDirty)
   mod.events:on("save.loaded", rebuild)
 
   mod.events:on("game.ready", function()
@@ -436,6 +464,7 @@ return function(mod)
   -- of the NPC.  Riding the sprite's own draw call inherits the transform
   -- for free, so the offsets below are correct in both modes.
   local function drawFor(npc, camX, camY)
+    if dirty then rebuild() end
     local tier = tiers[npc.id]
     if not (tier and enabled(tier)) then return end
     local image = art(mod.world and mod.world.game)
@@ -507,8 +536,9 @@ return function(mod)
     local lib = handle and handle.exports and handle.exports.lib
     if not (lib and type(lib.require) == "function") then return nil end
     local ok, v = pcall(lib.require, "Voxel3D")
-    if ok and type(v) == "table" and type(v.project) == "function"
-       and type(v.beginOverlay) == "function" then
+    -- only project() is required now: the overlay canvas comes from
+    -- worldPresent's own argument, so beginOverlay is no longer needed
+    if ok and type(v) == "table" and type(v.project) == "function" then
       voxel = v
       mod.log:info("voxel arena detected; bubbles will be projected into it")
     end
@@ -525,6 +555,7 @@ return function(mod)
       if not (v and canvas and ctx and tonumber(ctx.vw) and ctx.vw > 0) then
         return canvas
       end
+      ensureFresh()
       if not next(tiers) then return canvas end
       local ow = mod.world and mod.world:overworld()
       local image = art(mod.world and mod.world.game)
@@ -540,24 +571,40 @@ return function(mod)
       local scale = w / ctx.vw
       if not (scale > 0) then return canvas end
 
-      if not v.beginOverlay() then return canvas end
+      -- Draw into the canvas we were HANDED, not the arena's internal one.
+      -- worldPresent folds in descending priority, and T-SHIFT (priority 10)
+      -- runs first and returns a NEW, blurred canvas -- so beginOverlay's
+      -- scene canvas is no longer the image anyone will use, and the bubbles
+      -- landed on a discarded buffer.  TiltShift.apply keeps the dimensions,
+      -- so project()'s coordinates stay valid either way, and folding last
+      -- leaves the bubbles sharp on top of the blur rather than inside it.
       local g = love.graphics
+      local prevCanvas = g.getCanvas()
+      local bound = pcall(g.setCanvas, canvas)
+      if not bound then return canvas end
+      pcall(g.setShader)
+      if g.setDepthMode then pcall(g.setDepthMode) end
+
+      -- hoisted: these were being re-read per NPC per frame
+      local on = { enabled(1), enabled(2), enabled(3), enabled(4) }
+      local fade = alphaFor(4)
+
       for _, npc in ipairs(ow.npcs or {}) do
         local tier = tiers[npc.id]
-        if tier and enabled(tier) and quads[BUBBLE[tier]] then
+        if tier and on[tier] and quads[BUBBLE[tier]] then
           -- anchor on the sprite's feet, the point the engine projects its
           -- own emote from, then carry the flat layout's offset across:
           -- the bubble sits 4 right and 30 above that anchor
           local sx, sy = v.project(npc.px + 8, 0, npc.py + 16)
           if sx and sy then
-            g.setColor(1, 1, 1, alphaFor(tier))
+            g.setColor(1, 1, 1, tier == 4 and fade or 1)
             g.draw(image, quads[BUBBLE[tier]],
                    sx - 4 * scale, sy - 30 * scale, 0, scale, scale)
           end
         end
       end
       g.setColor(1, 1, 1, 1)
-      if type(v.endOverlay) == "function" then pcall(v.endOverlay) end
+      pcall(g.setCanvas, prevCanvas)
       return canvas
     end,
   })

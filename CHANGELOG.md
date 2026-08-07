@@ -3,6 +3,32 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.6.0
+
+### Fixed
+
+- **No bubbles while T-SHIFT was on.** `worldPresent` folds in descending
+  priority, so T-SHIFT (priority 10) runs first and hands on a *new*,
+  blurred canvas. The bubbles were being drawn through the arena's
+  `beginOverlay`, which binds its own scene canvas — no longer the image
+  anyone would use. They now draw onto the canvas `worldPresent` is handed,
+  which is correct whatever else folded before, and leaves them sharp on top
+  of the blur rather than inside it.
+
+### Changed
+
+- The save copy a closure probe runs against is made once per rebuild rather
+  than once per NPC. A save carries the party, the boxes, the bag and every
+  flag, and a map with several closure NPCs was paying for a full copy each,
+  on every flag change. It is keyed on the game it was built from and
+  cleared on every rebuild, so it can never answer for state it was not
+  built from.
+- `flag.changed` marks the map stale rather than rebuilding immediately. A
+  script setting three flags fired three full rebuilds; now the next draw
+  settles it once.
+- The bubble toggles and fade are read once per frame instead of once per
+  NPC per frame.
+
 ## 1.5.0
 
 ### Fixed

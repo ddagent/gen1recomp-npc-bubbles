@@ -258,18 +258,26 @@ do
     ow.runner:run(rows, { npc = npc, onDone = done })
   end
 
-  flags = {}
-  local g = game()
-  g.save.pikachuHappiness = 200
+  -- A fresh game per case.  The probe's save copy is cached against the
+  -- game it was built from and cleared on every rebuild, so in play each
+  -- state always arrives through a rebuild -- mutating one table in place
+  -- here would be testing a sequence the mod never sees.
+  local function melanieState(happy, got)
+    flags = got and { EVENT_GOT_BULBASAUR_IN_CERULEAN = true } or {}
+    local g = game()
+    g.save.pikachuHappiness = happy
+    return g
+  end
+
+  local g = melanieState(200, false)
   T.eq(tierOf(programFor(melanie, g), g), 1,
     "a happy Pikachu makes Melanie a gift, read out of a closure")
 
-  g.save.pikachuHappiness = 10
+  g = melanieState(10, false)
   T.eq(tierOf(programFor(melanie, g), g), nil,
     "an unhappy Pikachu and she is only talk")
 
-  g.save.pikachuHappiness = 200
-  flags.EVENT_GOT_BULBASAUR_IN_CERULEAN = true
+  g = melanieState(200, true)
   T.eq(tierOf(programFor(melanie, g), g), nil,
     "and once you hold the BULBASAUR she goes quiet")
   flags = {}
@@ -458,15 +466,19 @@ do
   T.eq(pipe and pipe.default, 1,
     "on by default, or it would restore to level 0 and never run")
 
-  local projected, overlay = {}, { begun = 0, ended = 0 }
+  local projected = {}
   local fakeVoxel = {
     project = function(wx, wy, wz)
       projected[#projected + 1] = { wx = wx, wy = wy, wz = wz }
       return 300, 200, 1
     end,
-    beginOverlay = function() overlay.begun = overlay.begun + 1 return true end,
-    endOverlay = function() overlay.ended = overlay.ended + 1 end,
   }
+  -- T-SHIFT is a worldPresent pipeline too, at a higher priority, and it
+  -- hands on a NEW blurred canvas.  So the bubbles must go onto whichever
+  -- canvas we are given, and the previous target must be restored.
+  local bound = {}
+  local realSetCanvas = love.graphics.setCanvas
+  love.graphics.setCanvas = function(c) bound[#bound + 1] = c or "NONE" end
   run.loader.mods.DRAMATIC_SHAPE =
     { id = "DRAMATIC_SHAPE", enabled = true, failed = false,
       manifest = { version = "1.5.5" } }
@@ -491,9 +503,11 @@ do
   local out = pipe.worldPresent(canvas, { vw = 160 })
   love.graphics.draw = realDraw
 
+  love.graphics.setCanvas = realSetCanvas
   T.eq(out, canvas, "the canvas is returned so the fold continues")
-  T.eq(overlay.begun, 1, "the arena's overlay is opened once")
-  T.eq(overlay.ended, 1, "and closed again -- a left-open canvas eats the frame")
+  T.eq(bound[1], canvas,
+    "it draws onto the canvas it was handed, not the arena's internal one")
+  T.check(#bound >= 2, "and restores the previous target rather than leaving it bound")
   T.eq(#projected, 1, "the NPC's world point is projected")
   if projected[1] then
     -- the engine anchors its own emote on the sprite's feet: px+8, py+16
@@ -509,10 +523,10 @@ do
   end
 
   -- a malformed context must not reach the overlay at all
-  local before = overlay.begun
+  local before = #bound
   T.eq(pipe.worldPresent(canvas, {}), canvas, "no world width: pass through")
   T.eq(pipe.worldPresent(nil, { vw = 160 }), nil, "no canvas: nothing to fold")
-  T.eq(overlay.begun, before, "and neither opened the overlay")
+  T.eq(#bound, before, "and neither one rebinds a canvas")
 
   liveOw.npcs = {}
   run.loader.mods.DRAMATIC_SHAPE = nil
