@@ -5,6 +5,8 @@
 Puts a bubble over the NPCs who actually do something, so the person holding
 a free TM does not look like the person who wants to tell you about ledges.
 
+![An NPC in town with a solid ! bubble over their head](docs/screenshot-town.png)
+
 | Bubble | Means |
 | --- | --- |
 | **`!`** | talk to them and you get something, right now |
@@ -26,6 +28,11 @@ quiet the moment you are holding it. Nothing lingers after you have taken it.
 The **faded `!`** is for people who will have something for you but not yet —
 Melanie before your Pikachu likes you enough, the bike shop before you have a
 voucher. It turns solid when you can actually claim it.
+
+The **smile** is for people worth another word later — they say different
+things as you progress.
+
+![Two NPCs in the bike shop, each with a smile bubble](docs/screenshot-bikeshop.png)
 
 Bubbles update the instant something changes, so one disappears as you finish
 the conversation rather than on the next screen.
