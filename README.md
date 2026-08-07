@@ -10,7 +10,7 @@ a free TM does not look like the person who wants to tell you about ledges.
 | **`!`** | talk to them and you get something, right now |
 | **faded `!`** | something here later — you cannot claim it yet |
 | **`?`** | talking to them changes something in the world |
-| **smile** | what they say depends on how far you have got |
+| **smile** | they say different things as you progress — worth another word later |
 
 They are the game's own bubbles — the same `!` a trainer shows when they spot
 you — and they sit in the same place above the head.
@@ -41,7 +41,7 @@ Set these in the in-game mod manager.
 | --- | --- | --- |
 | `GIFT BUBBLE` | `!` — you get something now | on |
 | `EVENT BUBBLE` | `?` — the world changes | on |
-| `STORY BUBBLE` | smile — dialogue tracks your progress | on |
+| `STORY BUBBLE` | smile — they say new things as you progress | on |
 | `LATER BUBBLE` | faded `!` — something here later | on |
 | `LATER FADE %` | how solid the faded `!` looks | 75 |
 
