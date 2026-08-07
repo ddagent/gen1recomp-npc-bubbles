@@ -3,6 +3,48 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.7.0
+
+### Fixed
+
+- **Bubbles drifted down and right when anti-aliasing was on.** The arena
+  renders into a canvas 2x or 4x the window and folds it back down at the
+  end, so `project()` answers in the big space while this overlay draws on
+  the folded one. The AA factor is now read from the voxel mod and divides
+  the projected position back down.
+- Only the position. `project()`'s third return is `focusW/cw` -- one number
+  off the camera matrix divided by another -- so it is a ratio with no
+  pixels in it and anti-aliasing cannot touch it. Dividing that as well
+  would halve every bubble at 2X and quarter it at 4X.
+- **Bubbles sat wrong under a low camera.** The mod anchored on the NPC's
+  feet and moved a flat 30 pixels up the screen for the head, which is only
+  right at one camera pitch -- in first person it barely cleared the knees.
+  It now projects the head itself, at a world height of 32, so the pitch
+  cannot break it.
+- **Bubbles were all one size.** `project()` reports how much the camera
+  magnifies a point and that was being thrown away. It now scales the
+  bubble, clamped between a quarter and four times flat size: the ratio
+  runs away at the near plane, and an NPC one step in front of a
+  first-person camera would otherwise get a bubble taller than the screen.
+- The sideways offset is measured from the sprite's **centre**, which is
+  what this path projects (`px + 8`). The flat path's `+4` is measured from
+  the sprite's left edge, so the same place is `-4` here.
+
+### Added
+
+- **A wall between you and an NPC now hides the bubble**, on the first- and
+  third-person rungs. Those are the rungs where the camera stands with the
+  player, so a line drawn from the player is the line the camera sees along.
+  The default tilted view looks over walls on purpose and is unchanged.
+- Water does not hide one. It stops you walking, not looking.
+
+### Note
+
+This is a sight line over the cell grid, not a depth test. A real one is not
+reachable from a mod here: the depth buffer exists only while the voxel
+mod's own pass is open, and none of the pipeline hooks run inside it. The
+arena's own emote bubbles have the same limitation.
+
 ## 1.6.1
 
 ### Changed

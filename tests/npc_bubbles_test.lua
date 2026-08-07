@@ -467,12 +467,22 @@ do
     "on by default, or it would restore to level 0 and never run")
 
   local projected = {}
+  -- project() answers in the SUPERSAMPLED canvas's pixels, so x and y grow
+  -- with the AA factor.  The third return is focusW/cw, a ratio off the
+  -- camera matrix with no pixels in it, so it does NOT.
+  local fakeDepth = 1
   local fakeVoxel = {
     project = function(wx, wy, wz)
       projected[#projected + 1] = { wx = wx, wy = wy, wz = wz }
-      return 300, 200, 1
+      return 300, 200, fakeDepth
     end,
   }
+  local fakeAAFactor = 1
+  local fakeAA = { factor = function() return fakeAAFactor end }
+  -- engaged() is true only on the free-cam rungs, where the camera stands
+  -- with the player and a sight line from the player is the camera's own
+  local fakeEngaged = false
+  local fakeFP = { engaged = function() return fakeEngaged end }
   -- T-SHIFT is a worldPresent pipeline too, at a higher priority, and it
   -- hands on a NEW blurred canvas.  So the bubbles must go onto whichever
   -- canvas we are given, and the previous target must be restored.
@@ -484,6 +494,8 @@ do
       manifest = { version = "1.5.5" } }
   run.loader.exports.DRAMATIC_SHAPE =
     { lib = { require = function(n)
+        if n == "AntiAlias" then return fakeAA end
+        if n == "FirstPerson" then return fakeFP end
         T.eq(n, "Voxel3D", "it asks the voxel lib for Voxel3D by name")
         return fakeVoxel
       end } }
@@ -513,14 +525,115 @@ do
     -- the engine anchors its own emote on the sprite's feet: px+8, py+16
     T.eq(projected[1].wx, 168, "anchored on the sprite's feet across")
     T.eq(projected[1].wz, 112, "and along -- project takes (x, height, z)")
-    T.eq(projected[1].wy, 0, "at ground height")
+    -- The HEAD is projected, not the feet with a flat offset added after.
+    -- A screen-space offset is only right for one camera pitch; a world
+    -- height is right for all of them, which is what first person needs.
+    T.eq(projected[1].wy, 32, "at head height, so the pitch cannot break it")
   end
   if drew[1] then
     -- 640 canvas px / 160 world px = 4 canvas px per world px
     T.eq(drew[1].s, 4, "scale comes from the canvas against the world view")
-    T.eq(drew[1].x, 300 - 4 * 4, "and the flat layout's offset is carried over")
-    T.eq(drew[1].y, 200 - 30 * 4, "so it sits above the head, not on the feet")
+    -- The flat path's +4 is from the sprite's LEFT edge; this projects
+    -- px+8, the sprite's CENTRE, so the same place is 4 - 8 = -4.  Carrying
+    -- the flat number across unchanged put every bubble half a tile right.
+    T.eq(drew[1].x, 300 - 4 * 4, "offset from the centre, not the left edge")
+    T.eq(drew[1].y, 200, "drawn from the projected head, no flat offset")
   end
+
+  -- ------- anti-aliasing moves the POSITION and nothing else
+  --
+  -- The pass renders into a canvas 2x or 4x the window and folds it back
+  -- down, so project() answers in the big space while worldPresent draws on
+  -- the resolved one.  Dividing x and y by the factor is the whole fix --
+  -- and dividing the depth ratio by it as well, which is tempting because
+  -- it arrives from the same call, silently halves every bubble at 2X.
+  local function drawOnce()
+    drew = {}
+    local rd = love.graphics.draw
+    love.graphics.draw = function(_, _, x, y, _, sx)
+      drew[#drew + 1] = { x = x, y = y, s = sx }
+    end
+    love.graphics.setCanvas = function(c) bound[#bound + 1] = c or "NONE" end
+    pipe.worldPresent(canvas, { vw = 160 })
+    love.graphics.draw = rd
+    return drew[1]
+  end
+
+  fakeAAFactor, fakeDepth = 2, 1
+  local at2x = drawOnce()
+  if at2x then
+    T.eq(at2x.x, 300 / 2 - 4 * 4, "2X AA halves the projected position")
+    T.eq(at2x.y, 200 / 2, "on both axes")
+    T.eq(at2x.s, 4, "but leaves the size alone -- the depth ratio has no AA in it")
+  end
+
+  fakeAAFactor = 4
+  local at4x = drawOnce()
+  if at4x then
+    T.eq(at4x.x, 300 / 4 - 4 * 4, "4X AA quarters the position")
+    T.eq(at4x.s, 4, "and still does not touch the size")
+  end
+
+  -- ------- depth scales the bubble, within limits
+  fakeAAFactor, fakeDepth = 1, 2
+  local near = drawOnce()
+  if near then
+    T.eq(near.s, 8, "a nearer NPC gets a bigger bubble")
+    T.eq(near.x, 300 - 4 * 8, "and its offset grows with it, staying aligned")
+  end
+
+  -- focusW/cw runs away at the near plane; unclamped, an NPC one step in
+  -- front of a first-person camera fills the screen with a bubble
+  fakeDepth = 1000
+  local tooNear = drawOnce()
+  if tooNear then T.eq(tooNear.s, 4 * 4, "a runaway depth is clamped") end
+  fakeDepth = 0.0001
+  local tooFar = drawOnce()
+  if tooFar then T.eq(tooFar.s, 4 * 0.25, "and so is a vanishing one") end
+  fakeDepth = -1
+  local behind = drawOnce()
+  if behind then T.eq(behind.s, 4, "a nonsense depth falls back to flat") end
+
+  fakeAAFactor, fakeDepth = 1, 1
+
+  -- ------- a wall between you and an NPC hides the bubble, in free cam only
+  --
+  -- There is no depth test available here: the depth buffer lives only
+  -- while the voxel mod's own pass is open and no pipeline hook runs inside
+  -- it.  So the sight line is walked over the cell grid instead, which is
+  -- honest precisely when the camera stands with the player.
+  npc.cellX, npc.cellY = 10, 6
+  liveOw.player = { cellX = 6, cellY = 6 }
+  local blocked = {}
+  liveOw.map = {
+    isWalkableCell = function(_, x, y) return not blocked[x .. "," .. y] end,
+    isWaterCell = function(_, x, y) return false end,
+  }
+
+  fakeEngaged = false
+  blocked["8,6"] = true
+  T.check(drawOnce() ~= nil,
+    "the tilted view is left alone -- it looks over walls on purpose")
+
+  fakeEngaged = true
+  T.check(drawOnce() == nil, "in free cam a wall in the way hides the bubble")
+
+  blocked = {}
+  T.check(drawOnce() ~= nil, "clear line of sight shows it again")
+
+  -- a pond stops you walking, not looking
+  blocked["8,6"] = true
+  liveOw.map.isWaterCell = function(_, x, y) return x == 8 and y == 6 end
+  T.check(drawOnce() ~= nil, "water is see-through, so it does not hide one")
+
+  -- the NPC's own cell is the destination, never an obstacle
+  liveOw.map.isWaterCell = function() return false end
+  blocked = { ["10,6"] = true }
+  T.check(drawOnce() ~= nil, "the NPC's own cell does not block itself")
+
+  blocked = {}
+  fakeEngaged = false
+  liveOw.map, liveOw.player = nil, nil
 
   -- a malformed context must not reach the overlay at all
   local before = #bound

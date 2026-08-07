@@ -527,10 +527,78 @@ return function(mod)
   -- The two paths cannot both fire.  worldPresent only runs when a pipeline
   -- produced a world canvas, which is exactly when NPC.draw is skipped; in
   -- flat mode there is no canvas and this pass is never called at all.
-  local voxel, voxelTried = nil, false
+  -- The point the bubble hangs from, in world pixels above the NPC's feet.
+  -- Positive is up: the arena flips clip-space Y for LOVE's Y-down canvas
+  -- (Mat4.scale(1, -1, 1) on the projection), and its meshes are one unit
+  -- per world pixel.  A sprite is 16 tall, so 32 is a tile above the head;
+  -- the bubble is drawn downward from there and comes to rest on it.
+  --
+  -- Projecting this point is what makes the placement survive a camera
+  -- pitch.  A fixed offset in screen pixels is only ever right for one
+  -- angle, which is why it fell apart the moment the camera got low.
+  local HEAD_Y = 32
+  -- focusW/cw is 1 at the focus plane and unbounded as the near plane is
+  -- approached; these keep a bubble between a quarter and four times its
+  -- flat size.
+  local DEPTH_MIN, DEPTH_MAX = 0.25, 4
+
+  local voxel, aaLib, fpLib, voxelTried = nil, nil, nil, false
+
+  -- Whether the camera is standing with the player.  FirstPerson.engaged()
+  -- covers the 1ST and 3RD rungs, which is exactly the case where a line
+  -- drawn from the player is the line the camera can see along.  The default
+  -- tilted view is not a free cam, looks over walls on purpose, and is left
+  -- alone.
+  local function cameraWithPlayer()
+    if not (fpLib and type(fpLib.engaged) == "function") then return false end
+    local ok, on = pcall(fpLib.engaged)
+    return ok and on == true
+  end
+
+  -- Bresenham across the cell grid from the player to the NPC.  A cell that
+  -- is neither walkable nor water is a wall, a building or a tree -- things
+  -- you cannot see past.  Water is excluded because a pond blocks walking
+  -- and not looking, and a bubble vanishing across a lake would be a worse
+  -- bug than the one this fixes.
+  --
+  -- This is a proxy, not a depth test.  A real one is not reachable from
+  -- here: the depth buffer only exists while the voxel mod's own pass is
+  -- open, and no pipeline hook runs inside it.
+  local function sightBlocked(ow, npc)
+    local map, player = ow.map, ow.player
+    if not (map and player and type(map.isWalkableCell) == "function") then
+      return false
+    end
+    local x0, y0, x1, y1 = player.cellX, player.cellY, npc.cellX, npc.cellY
+    if not (x0 and y0 and x1 and y1) then return false end
+    local dx, dy = math.abs(x1 - x0), math.abs(y1 - y0)
+    local sx = x0 < x1 and 1 or -1
+    local sy = y0 < y1 and 1 or -1
+    local err = dx - dy
+    local x, y = x0, y0
+    -- a cap rather than a while-true: a malformed map must not spin the
+    -- draw loop, and nothing on a Gen 1 map is 96 cells away and readable
+    for _ = 1, 96 do
+      if x == x1 and y == y1 then return false end
+      local e2 = 2 * err
+      if e2 > -dy then err, x = err - dy, x + sx end
+      if e2 < dx then err, y = err + dx, y + sy end
+      if not (x == x1 and y == y1) then
+        local okW, walk = pcall(map.isWalkableCell, map, x, y)
+        if okW and not walk then
+          local okA, water = false, false
+          if type(map.isWaterCell) == "function" then
+            okA, water = pcall(map.isWaterCell, map, x, y)
+          end
+          if not (okA and water) then return true end
+        end
+      end
+    end
+    return false
+  end
 
   local function voxel3D()
-    if voxelTried then return voxel end
+    if voxelTried then return voxel, aaLib end
     voxelTried = true
     local handle = type(mod.find) == "function" and mod.find("DRAMATIC_SHAPE")
     local lib = handle and handle.exports and handle.exports.lib
@@ -542,7 +610,22 @@ return function(mod)
       voxel = v
       mod.log:info("voxel arena detected; bubbles will be projected into it")
     end
-    return voxel
+    -- project() answers in supersampled coordinates when AA is on, but
+    -- worldPresent draws on the resolved canvas, so the AA factor is
+    -- needed to divide those back down.  Resolved as a module reference
+    -- (not a value) so the player toggling AA mid-session takes effect
+    -- on the next frame.
+    local ok2, aa = pcall(lib.require, "AntiAlias")
+    if ok2 and type(aa) == "table" and type(aa.factor) == "function" then
+      aaLib = aa
+    end
+    -- Same treatment: held as a module so the rung the player is on is read
+    -- fresh each frame rather than frozen at load.
+    local ok3, fp = pcall(lib.require, "FirstPerson")
+    if ok3 and type(fp) == "table" and type(fp.engaged) == "function" then
+      fpLib = fp
+    end
+    return voxel, aaLib
   end
 
   mod.content.render_pipelines:register("npc_bubbles_overlay", {
@@ -551,7 +634,7 @@ return function(mod)
     -- to level 0 and the pass would silently never run
     default = 1,
     worldPresent = function(canvas, ctx)
-      local v = voxel3D()
+      local v, aa = voxel3D()
       if not (v and canvas and ctx and tonumber(ctx.vw) and ctx.vw > 0) then
         return canvas
       end
@@ -571,6 +654,17 @@ return function(mod)
       local scale = w / ctx.vw
       if not (scale > 0) then return canvas end
 
+      -- project() answers in the SUPERSAMPLED coordinate space when AA is on,
+      -- but worldPresent draws onto the RESOLVED canvas.  Dividing by the AA
+      -- factor maps supersampled positions back down to resolved pixels, so
+      -- the bubble lands at the right place whether AA is off (factor 1),
+      -- 2X (factor 2) or 4X.
+      local aaFactor = 1
+      if aa then
+        local ok2, f = pcall(aa.factor)
+        if ok2 and tonumber(f) and f > 0 then aaFactor = f end
+      end
+
       -- Draw into the canvas we were HANDED, not the arena's internal one.
       -- worldPresent folds in descending priority, and T-SHIFT (priority 10)
       -- runs first and returns a NEW, blurred canvas -- so beginOverlay's
@@ -589,17 +683,48 @@ return function(mod)
       local on = { enabled(1), enabled(2), enabled(3), enabled(4) }
       local fade = alphaFor(4)
 
+      -- read once, not per NPC: the rung cannot change mid-frame
+      local checkSight = cameraWithPlayer()
+
       for _, npc in ipairs(ow.npcs or {}) do
         local tier = tiers[npc.id]
-        if tier and on[tier] and quads[BUBBLE[tier]] then
-          -- anchor on the sprite's feet, the point the engine projects its
-          -- own emote from, then carry the flat layout's offset across:
-          -- the bubble sits 4 right and 30 above that anchor
-          local sx, sy = v.project(npc.px + 8, 0, npc.py + 16)
+        if tier and on[tier] and quads[BUBBLE[tier]]
+          and not (checkSight and sightBlocked(ow, npc)) then
+          -- project() returns canvas x, canvas y, and a depth-scale: how
+          -- much the perspective camera magnifies this point (close NPCs
+          -- are large, far ones small).  That depth value is what makes
+          -- the bubble grow as the NPC approaches under perspective.
+          --
+          -- The head is projected directly (at a world height of 32) rather
+          -- than offsetting a flat number of pixels from the feet, so the
+          -- position is correct under any camera angle -- including the
+          -- aggressive first-person rung where a flat offset barely moves.
+          --
+          -- Only x and y carry the AA factor: project() multiplies those by
+          -- the scene canvas size, which is the supersampled one.  The third
+          -- return is focusW/cw -- one number off the camera matrix divided
+          -- by another -- so it is a ratio with no pixels in it and AA
+          -- cannot touch it.  Dividing it too made every bubble half size
+          -- at 2X and a quarter at 4X.
+          local sx, sy, depth = v.project(npc.px + 8, HEAD_Y, npc.py + 16)
           if sx and sy then
+            sx, sy = sx / aaFactor, sy / aaFactor
+            local d = tonumber(depth) or 1
+            -- Clamped because focusW/cw runs away at the near plane: an NPC
+            -- a step in front of a first-person camera would otherwise be
+            -- given a bubble many times the height of the screen, and one
+            -- across the map a bubble smaller than a pixel.
+            if not (d > 0) then d = 1 end
+            d = math.max(DEPTH_MIN, math.min(DEPTH_MAX, d))
+            local bs = scale * d
             g.setColor(1, 1, 1, tier == 4 and fade or 1)
+            -- -4, not +4.  The flat path's +4 is measured from the sprite's
+            -- LEFT edge (npc.px - camX + 4); this projects npc.px + 8, the
+            -- sprite's CENTRE, so landing in the same place is 4 - 8 = -4.
+            -- Reading the flat offset across without the anchor moved every
+            -- bubble half a tile right.
             g.draw(image, quads[BUBBLE[tier]],
-                   sx - 4 * scale, sy - 30 * scale, 0, scale, scale)
+                   sx - 4 * bs, sy, 0, bs, bs)
           end
         end
       end
