@@ -3,6 +3,21 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.7.2
+
+### Changed
+
+- **`NPC BUBBLES 3D` is gone from START > OPTIONS.** It was never a display
+  mode to choose between -- it is how this mod draws when something else
+  owns the world pass, and the only thing switching it off achieved was
+  bubbles disappearing in 3D. Having the mod enabled is already that toggle.
+- Drawing over an arena's world pass does require registering a pipeline,
+  and the menu lists every pipeline there is. So the row is dropped on its
+  way to the menu through `ui.options.rows`, the hook the options list is
+  passed through for exactly this. Every other row is untouched.
+- Anyone who had already switched it off is put back on when the save
+  loads, since there is no longer a control to switch it back with.
+
 ## 1.7.1
 
 ### Fixed

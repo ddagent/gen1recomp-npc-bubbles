@@ -624,6 +624,32 @@ do
   liveOw.npcs = {}
   run.loader.mods.DRAMATIC_SHAPE = nil
 
+  -- ------- the 3D pass is not a display mode, so it is not in OPTIONS
+  --
+  -- Drawing over an arena's world pass means registering a pipeline, and
+  -- the options menu lists every pipeline unfiltered.  But switching this
+  -- one off only makes bubbles vanish in 3D -- having the mod enabled is
+  -- already the toggle -- so the row is dropped on its way to the menu.
+  do
+    local incoming = {
+      { id = "tilt", label = "TILT" },
+      { id = "pipeline:voxel", label = "VOXEL" },
+      { id = "pipeline:npc_bubbles_overlay", label = "NPC BUBBLES 3D" },
+      { id = "pipeline:tiltshift", label = "T-SHIFT" },
+    }
+    local out = Runtime.call("ui.options.rows",
+      function(_, rows) return rows end, nil, incoming)
+    T.check(type(out) == "table", "the hook hands back a row list")
+    local ids = {}
+    for _, row in ipairs(out) do ids[row.id] = true end
+    T.check(not ids["pipeline:npc_bubbles_overlay"],
+      "our own pipeline row is gone from START > OPTIONS")
+    -- and nothing else is collateral: another mod's rows have to survive
+    T.check(ids["tilt"] and ids["pipeline:voxel"] and ids["pipeline:tiltshift"],
+      "every other row is left exactly where it was")
+    T.eq(#out, #incoming - 1, "exactly one row removed")
+  end
+
   -- ------- the arena is found by what it OWNS, not by its name
   --
   -- The merge records which mod registered each pipeline under _owners, so a

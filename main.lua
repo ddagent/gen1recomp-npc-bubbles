@@ -571,7 +571,46 @@ return function(mod)
     return voxel, aaLib
   end
 
-  mod.content.render_pipelines:register("npc_bubbles_overlay", {
+  -- ------- keeping the pass out of START > OPTIONS
+  --
+  -- Drawing over an arena's world pass means registering a pipeline, and the
+  -- options menu lists every pipeline there is (Pipelines.rows builds a row
+  -- per entry, unfiltered).  But this is not a display mode anyone chooses
+  -- between: it is how this mod draws when something else owns the world,
+  -- and the only thing switching it off achieves is bubbles disappearing in
+  -- 3D.  Having the mod enabled is already that toggle.
+  --
+  -- So the row is dropped on its way to the menu.  OptionsMenu passes its
+  -- finished list through ui.options.rows and takes back whatever comes out,
+  -- which is the sanctioned way to change that list.
+  local PIPELINE_ID = "npc_bubbles_overlay"
+  local ROW_ID = "pipeline:" .. PIPELINE_ID
+
+  mod.hooks:wrap("ui.options.rows", function(nextFn, game, rows)
+    local out = nextFn(game, rows)
+    if type(out) ~= "table" then return out end
+    local kept = {}
+    for _, row in ipairs(out) do
+      if row.id ~= ROW_ID then kept[#kept + 1] = row end
+    end
+    return kept
+  end)
+
+  -- A player who switched it off before the row went away would be left with
+  -- no bubbles in 3D and no way back, so the level is asserted once the save
+  -- is up.  This is not fighting a live choice -- there is no longer a
+  -- control to make one with.
+  local function forceOn()
+    local ok, Pipelines = pcall(require, "src.render.Pipelines")
+    if not (ok and type(Pipelines) == "table"
+      and type(Pipelines.setLevel) == "function") then return end
+    if (Pipelines.level and Pipelines.level(PIPELINE_ID) or 0) > 0 then return end
+    pcall(Pipelines.setLevel, PIPELINE_ID, 1)
+  end
+  mod.events:on("save.loaded", forceOn)
+  mod.events:on("save.created", forceOn)
+
+  mod.content.render_pipelines:register(PIPELINE_ID, {
     label = "NPC BUBBLES 3D",
     -- on unless the player turns it off; without this a pipeline restores
     -- to level 0 and the pass would silently never run
