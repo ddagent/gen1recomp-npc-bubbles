@@ -3,6 +3,43 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 1.7.1
+
+### Fixed
+
+- **1.7.0 moved the bubble off the NPC.** It projected the head at a world
+  height instead of the ground point, which slides the anchor a tile or two
+  under a tilted camera. The offsets are back to the ground point -- and
+  they are not eyeballed, they are what the engine's own emote works out to.
+  In the pipeline path `OverworldController` anchors an emote at
+  `(px + 8, py + 16)` and hands the flat closure a transform that cancels
+  with `fxEmote`'s own `(+4, -14)` to exactly `sx - 4*scale, sy - 30*scale`.
+- **1.7.0 shrank the bubble with distance**, which made it tiny in first
+  person and disagreed with the game's own emote bubble standing beside it.
+  The engine is explicit about this for every field effect: "Deliberately
+  unscaled by depth, like `:billboard`: an effect keeps its crisp authored
+  size and only its anchor moves." So it no longer scales.
+- **1.7.0 made bubbles vanish at some distances.** A sight line walked over
+  the tile grid clipped wall corners and signposts and blinked bubbles out
+  while you walked. It is gone. There is no depth test to be had here --
+  the depth buffer exists only while the arena's own pass is open and no
+  pipeline hook runs inside it -- and the arena's own emotes draw through
+  walls too, so this matches the game.
+
+### Changed
+
+- The arena is found by **whoever registered the `voxel` pipeline**, read
+  from the registry's `_owners`, rather than by hardcoded name. A fork or a
+  rename now works; the original name remains the fallback.
+
+### Note
+
+The `NPC BUBBLES 3D` row cannot be hidden. `Pipelines.rows()` builds a row
+for every registered pipeline with no filter, and the pass has to be its own
+pipeline: attaching it to the arena's would run it at priority 20, ahead of
+T-SHIFT at 10, and the bubbles would come out inside the blur. It is on by
+default, so it needs no attention.
+
 ## 1.7.0
 
 ### Fixed

@@ -525,10 +525,11 @@ do
     -- the engine anchors its own emote on the sprite's feet: px+8, py+16
     T.eq(projected[1].wx, 168, "anchored on the sprite's feet across")
     T.eq(projected[1].wz, 112, "and along -- project takes (x, height, z)")
-    -- The HEAD is projected, not the feet with a flat offset added after.
-    -- A screen-space offset is only right for one camera pitch; a world
-    -- height is right for all of them, which is what first person needs.
-    T.eq(projected[1].wy, 32, "at head height, so the pitch cannot break it")
+    -- Ground height, matching the engine: in the pipeline path
+    -- OverworldController anchors an emote at (px+8, py+16) and projects
+    -- THAT, sliding the flat offset on afterwards.  Projecting the head
+    -- instead moves the anchor a tile or two under a tilted camera.
+    T.eq(projected[1].wy, 0, "at ground height, like the engine's own emote")
   end
   if drew[1] then
     -- 640 canvas px / 160 world px = 4 canvas px per world px
@@ -536,8 +537,12 @@ do
     -- The flat path's +4 is from the sprite's LEFT edge; this projects
     -- px+8, the sprite's CENTRE, so the same place is 4 - 8 = -4.  Carrying
     -- the flat number across unchanged put every bubble half a tile right.
-    T.eq(drew[1].x, 300 - 4 * 4, "offset from the centre, not the left edge")
-    T.eq(drew[1].y, 200, "drawn from the projected head, no flat offset")
+    -- Not chosen by eye.  drawFx.at translates by
+    -- (sx/scale - (px+8-cam.x), sy/scale - (py+16-cam.y)) and fxEmote then
+    -- draws at (px-cam.x+4, py-cam.y-14); the two cancel to
+    -- (sx/scale - 4, sy/scale - 30) inside a scale(scale).
+    T.eq(drew[1].x, 300 - 4 * 4, "the engine's own emote offset, across")
+    T.eq(drew[1].y, 200 - 30 * 4, "and up")
   end
 
   -- ------- anti-aliasing moves the POSITION and nothing else
@@ -559,12 +564,12 @@ do
     return drew[1]
   end
 
-  fakeAAFactor, fakeDepth = 2, 1
+  fakeAAFactor = 2
   local at2x = drawOnce()
   if at2x then
     T.eq(at2x.x, 300 / 2 - 4 * 4, "2X AA halves the projected position")
-    T.eq(at2x.y, 200 / 2, "on both axes")
-    T.eq(at2x.s, 4, "but leaves the size alone -- the depth ratio has no AA in it")
+    T.eq(at2x.y, 200 / 2 - 30 * 4, "on both axes")
+    T.eq(at2x.s, 4, "and the size is untouched -- only the anchor moved")
   end
 
   fakeAAFactor = 4
@@ -574,65 +579,40 @@ do
     T.eq(at4x.s, 4, "and still does not touch the size")
   end
 
-  -- ------- depth scales the bubble, within limits
-  fakeAAFactor, fakeDepth = 1, 2
-  local near = drawOnce()
-  if near then
-    T.eq(near.s, 8, "a nearer NPC gets a bigger bubble")
-    T.eq(near.x, 300 - 4 * 8, "and its offset grows with it, staying aligned")
+  -- ------- distance does NOT change the size
+  --
+  -- The engine says it of its own field FX: "Deliberately unscaled by
+  -- depth, like :billboard: an effect keeps its crisp authored size and
+  -- only its anchor moves."  A bubble that shrank with distance disagreed
+  -- with the game's own emote bubble standing next to it, and in first
+  -- person it shrank to nothing.
+  fakeAAFactor = 1
+  for _, d in ipairs({ 0.01, 1, 50, -1 }) do
+    fakeDepth = d
+    local row = drawOnce()
+    if row then
+      T.eq(row.s, 4, "depth " .. d .. " draws at the authored size")
+    end
   end
-
-  -- focusW/cw runs away at the near plane; unclamped, an NPC one step in
-  -- front of a first-person camera fills the screen with a bubble
-  fakeDepth = 1000
-  local tooNear = drawOnce()
-  if tooNear then T.eq(tooNear.s, 4 * 4, "a runaway depth is clamped") end
-  fakeDepth = 0.0001
-  local tooFar = drawOnce()
-  if tooFar then T.eq(tooFar.s, 4 * 0.25, "and so is a vanishing one") end
-  fakeDepth = -1
-  local behind = drawOnce()
-  if behind then T.eq(behind.s, 4, "a nonsense depth falls back to flat") end
 
   fakeAAFactor, fakeDepth = 1, 1
 
-  -- ------- a wall between you and an NPC hides the bubble, in free cam only
+  -- ------- a wall does NOT hide the bubble, and that is deliberate
   --
-  -- There is no depth test available here: the depth buffer lives only
+  -- There is no depth test to be had here: the depth buffer lives only
   -- while the voxel mod's own pass is open and no pipeline hook runs inside
-  -- it.  So the sight line is walked over the cell grid instead, which is
-  -- honest precisely when the camera stands with the player.
+  -- it.  A sight line walked over the tile grid was tried and removed --
+  -- it clipped wall corners and signposts and blinked bubbles out while
+  -- you walked.  The arena's own emote bubbles draw through walls too, so
+  -- this now matches the game standing next to it.
   npc.cellX, npc.cellY = 10, 6
   liveOw.player = { cellX = 6, cellY = 6 }
-  local blocked = {}
   liveOw.map = {
-    isWalkableCell = function(_, x, y) return not blocked[x .. "," .. y] end,
-    isWaterCell = function(_, x, y) return false end,
+    isWalkableCell = function() return false end,
+    isWaterCell = function() return false end,
   }
-
-  fakeEngaged = false
-  blocked["8,6"] = true
   T.check(drawOnce() ~= nil,
-    "the tilted view is left alone -- it looks over walls on purpose")
-
-  fakeEngaged = true
-  T.check(drawOnce() == nil, "in free cam a wall in the way hides the bubble")
-
-  blocked = {}
-  T.check(drawOnce() ~= nil, "clear line of sight shows it again")
-
-  -- a pond stops you walking, not looking
-  blocked["8,6"] = true
-  liveOw.map.isWaterCell = function(_, x, y) return x == 8 and y == 6 end
-  T.check(drawOnce() ~= nil, "water is see-through, so it does not hide one")
-
-  -- the NPC's own cell is the destination, never an obstacle
-  liveOw.map.isWaterCell = function() return false end
-  blocked = { ["10,6"] = true }
-  T.check(drawOnce() ~= nil, "the NPC's own cell does not block itself")
-
-  blocked = {}
-  fakeEngaged = false
+    "a wall in the way does not hide the bubble, like the engine's emote")
   liveOw.map, liveOw.player = nil, nil
 
   -- a malformed context must not reach the overlay at all
@@ -643,6 +623,24 @@ do
 
   liveOw.npcs = {}
   run.loader.mods.DRAMATIC_SHAPE = nil
+
+  -- ------- the arena is found by what it OWNS, not by its name
+  --
+  -- The merge records which mod registered each pipeline under _owners, so a
+  -- fork or a rename is still found.  Hardcoding one name meant the mod only
+  -- ever worked with one arena, spelled exactly one way.
+  local ownerOf = run.loader.exports.npc_bubbles.voxelOwner
+  T.check(type(ownerOf) == "function", "the owner lookup is testable")
+
+  T.eq(ownerOf({ render_pipelines = { _owners = { voxel = "SOME_FORK" } } }),
+    "SOME_FORK", "whoever owns the voxel pipeline is the arena")
+  T.eq(ownerOf({ render_pipelines = { _owners = { tiltshift = "X" } } }),
+    "DRAMATIC_SHAPE", "no voxel owner recorded: fall back to the original")
+  T.eq(ownerOf({ render_pipelines = {} }), "DRAMATIC_SHAPE",
+    "a registry with no provenance falls back too")
+  T.eq(ownerOf({}), "DRAMATIC_SHAPE", "and so does one with no pipelines")
+  T.eq(ownerOf({ render_pipelines = { _owners = { voxel = "" } } }),
+    "DRAMATIC_SHAPE", "an empty owner is not a mod id")
   run.loader.exports.DRAMATIC_SHAPE = nil
 end
 

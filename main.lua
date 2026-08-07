@@ -527,80 +527,29 @@ return function(mod)
   -- The two paths cannot both fire.  worldPresent only runs when a pipeline
   -- produced a world canvas, which is exactly when NPC.draw is skipped; in
   -- flat mode there is no canvas and this pass is never called at all.
-  -- The point the bubble hangs from, in world pixels above the NPC's feet.
-  -- Positive is up: the arena flips clip-space Y for LOVE's Y-down canvas
-  -- (Mat4.scale(1, -1, 1) on the projection), and its meshes are one unit
-  -- per world pixel.  A sprite is 16 tall, so 32 is a tile above the head;
-  -- the bubble is drawn downward from there and comes to rest on it.
-  --
-  -- Projecting this point is what makes the placement survive a camera
-  -- pitch.  A fixed offset in screen pixels is only ever right for one
-  -- angle, which is why it fell apart the moment the camera got low.
-  local HEAD_Y = 32
-  -- focusW/cw is 1 at the focus plane and unbounded as the near plane is
-  -- approached; these keep a bubble between a quarter and four times its
-  -- flat size.
-  local DEPTH_MIN, DEPTH_MAX = 0.25, 4
-
-  local voxel, aaLib, fpLib, voxelTried = nil, nil, nil, false
-
-  -- Whether the camera is standing with the player.  FirstPerson.engaged()
-  -- covers the 1ST and 3RD rungs, which is exactly the case where a line
-  -- drawn from the player is the line the camera can see along.  The default
-  -- tilted view is not a free cam, looks over walls on purpose, and is left
-  -- alone.
-  local function cameraWithPlayer()
-    if not (fpLib and type(fpLib.engaged) == "function") then return false end
-    local ok, on = pcall(fpLib.engaged)
-    return ok and on == true
-  end
-
-  -- Bresenham across the cell grid from the player to the NPC.  A cell that
-  -- is neither walkable nor water is a wall, a building or a tree -- things
-  -- you cannot see past.  Water is excluded because a pond blocks walking
-  -- and not looking, and a bubble vanishing across a lake would be a worse
-  -- bug than the one this fixes.
-  --
-  -- This is a proxy, not a depth test.  A real one is not reachable from
-  -- here: the depth buffer only exists while the voxel mod's own pass is
-  -- open, and no pipeline hook runs inside it.
-  local function sightBlocked(ow, npc)
-    local map, player = ow.map, ow.player
-    if not (map and player and type(map.isWalkableCell) == "function") then
-      return false
+  -- Whoever registered the "voxel" pipeline is the arena, whatever it is
+  -- called.  The merge records provenance under the registry's _owners, so a
+  -- fork or a rename is found without this mod knowing its name; the
+  -- original stays as the fallback for a build whose registry does not carry
+  -- the bookkeeping.
+  local function voxelOwner(data)
+    data = data or (mod.world and mod.world.game and mod.world.game.data)
+    local defs = type(data) == "table" and data.render_pipelines
+    local owners = type(defs) == "table" and defs._owners
+    if type(owners) == "table" and type(owners.voxel) == "string"
+      and owners.voxel ~= "" then
+      return owners.voxel
     end
-    local x0, y0, x1, y1 = player.cellX, player.cellY, npc.cellX, npc.cellY
-    if not (x0 and y0 and x1 and y1) then return false end
-    local dx, dy = math.abs(x1 - x0), math.abs(y1 - y0)
-    local sx = x0 < x1 and 1 or -1
-    local sy = y0 < y1 and 1 or -1
-    local err = dx - dy
-    local x, y = x0, y0
-    -- a cap rather than a while-true: a malformed map must not spin the
-    -- draw loop, and nothing on a Gen 1 map is 96 cells away and readable
-    for _ = 1, 96 do
-      if x == x1 and y == y1 then return false end
-      local e2 = 2 * err
-      if e2 > -dy then err, x = err - dy, x + sx end
-      if e2 < dx then err, y = err + dx, y + sy end
-      if not (x == x1 and y == y1) then
-        local okW, walk = pcall(map.isWalkableCell, map, x, y)
-        if okW and not walk then
-          local okA, water = false, false
-          if type(map.isWaterCell) == "function" then
-            okA, water = pcall(map.isWaterCell, map, x, y)
-          end
-          if not (okA and water) then return true end
-        end
-      end
-    end
-    return false
+    return "DRAMATIC_SHAPE"
   end
+  mod.exports.voxelOwner = voxelOwner
+
+  local voxel, aaLib, voxelTried = nil, nil, false
 
   local function voxel3D()
     if voxelTried then return voxel, aaLib end
     voxelTried = true
-    local handle = type(mod.find) == "function" and mod.find("DRAMATIC_SHAPE")
+    local handle = type(mod.find) == "function" and mod.find(voxelOwner())
     local lib = handle and handle.exports and handle.exports.lib
     if not (lib and type(lib.require) == "function") then return nil end
     local ok, v = pcall(lib.require, "Voxel3D")
@@ -618,12 +567,6 @@ return function(mod)
     local ok2, aa = pcall(lib.require, "AntiAlias")
     if ok2 and type(aa) == "table" and type(aa.factor) == "function" then
       aaLib = aa
-    end
-    -- Same treatment: held as a module so the rung the player is on is read
-    -- fresh each frame rather than frozen at load.
-    local ok3, fp = pcall(lib.require, "FirstPerson")
-    if ok3 and type(fp) == "table" and type(fp.engaged) == "function" then
-      fpLib = fp
     end
     return voxel, aaLib
   end
@@ -683,13 +626,9 @@ return function(mod)
       local on = { enabled(1), enabled(2), enabled(3), enabled(4) }
       local fade = alphaFor(4)
 
-      -- read once, not per NPC: the rung cannot change mid-frame
-      local checkSight = cameraWithPlayer()
-
       for _, npc in ipairs(ow.npcs or {}) do
         local tier = tiers[npc.id]
-        if tier and on[tier] and quads[BUBBLE[tier]]
-          and not (checkSight and sightBlocked(ow, npc)) then
+        if tier and on[tier] and quads[BUBBLE[tier]] then
           -- project() returns canvas x, canvas y, and a depth-scale: how
           -- much the perspective camera magnifies this point (close NPCs
           -- are large, far ones small).  That depth value is what makes
@@ -706,25 +645,33 @@ return function(mod)
           -- by another -- so it is a ratio with no pixels in it and AA
           -- cannot touch it.  Dividing it too made every bubble half size
           -- at 2X and a quarter at 4X.
-          local sx, sy, depth = v.project(npc.px + 8, HEAD_Y, npc.py + 16)
+          -- Ground point, not the head.  These offsets are not guesses --
+          -- they are what the engine's own emote works out to.  In the
+          -- pipeline path OverworldController anchors an emote at
+          -- (px + 8, py + 16) and hands the flat closure a transform:
+          --
+          --   translate(sx/scale - (px + 8 - cam.x),
+          --             sy/scale - (py + 16 - cam.y))   -- drawFx.at
+          --   draw at   (px - cam.x + 4, py - cam.y - 14)  -- fxEmote
+          --
+          -- which cancels to (sx/scale - 4, sy/scale - 30) inside a
+          -- scale(scale) -- so sx - 4*scale, sy - 30*scale in canvas pixels.
+          -- Projecting the head instead moved the anchor a tile or two off
+          -- under a tilted camera, which is what put the bubble in front of
+          -- the NPC.
+          local sx, sy = v.project(npc.px + 8, 0, npc.py + 16)
           if sx and sy then
+            -- Only the position carries the AA factor; there is nothing
+            -- else left to correct now that the size is flat again.
             sx, sy = sx / aaFactor, sy / aaFactor
-            local d = tonumber(depth) or 1
-            -- Clamped because focusW/cw runs away at the near plane: an NPC
-            -- a step in front of a first-person camera would otherwise be
-            -- given a bubble many times the height of the screen, and one
-            -- across the map a bubble smaller than a pixel.
-            if not (d > 0) then d = 1 end
-            d = math.max(DEPTH_MIN, math.min(DEPTH_MAX, d))
-            local bs = scale * d
             g.setColor(1, 1, 1, tier == 4 and fade or 1)
-            -- -4, not +4.  The flat path's +4 is measured from the sprite's
-            -- LEFT edge (npc.px - camX + 4); this projects npc.px + 8, the
-            -- sprite's CENTRE, so landing in the same place is 4 - 8 = -4.
-            -- Reading the flat offset across without the anchor moved every
-            -- bubble half a tile right.
+            -- Unscaled by depth, deliberately.  The engine says it of its
+            -- own field FX: "an effect keeps its crisp authored size and
+            -- only its anchor moves."  Scaling with distance made the
+            -- bubble tiny in first person and disagreed with the game's own
+            -- emote bubble standing next to it.
             g.draw(image, quads[BUBBLE[tier]],
-                   sx - 4 * bs, sy, 0, bs, bs)
+                   sx - 4 * scale, sy - 30 * scale, 0, scale, scale)
           end
         end
       end
