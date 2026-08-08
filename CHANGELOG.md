@@ -3,6 +3,28 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.1.0
+
+### Changed
+
+- **An NPC with nothing left to say no longer keeps a smile.** Two cases.
+  Someone who handed their gift over and can never offer another -- the ROUTE
+  1 POTION man, COPYCAT, OAK's aides, the TM givers -- goes quiet. And someone
+  whose dialogue is settled for good goes quiet too: once BROCK is beaten, the
+  PEWTER gym guide's advice branch is unreachable forever, so the line he says
+  now is the last one he will ever say. A branch decided by a flag that is
+  already true can never decide differently -- only three flags in the whole
+  game are ever cleared. A flag that is still FALSE, or an item check, keeps
+  the bubble, because either can still change.
+
+### Fixed
+
+- **The CELADON MART roof girl offers her TMs properly.** She swaps three
+  drinks for three TMs, and read as small talk in every state -- including
+  standing there holding all three. She now shows a `!` when you are carrying
+  a drink she will trade for, a faded `!` when you are not but she still owes
+  you one, and nothing once all three are done.
+
 ## 2.0.1
 
 ### Added

@@ -30,7 +30,9 @@ Melanie before your Pikachu likes you enough, the bike shop before you have a
 voucher. It turns solid when you can actually claim it.
 
 The **smile** is for people worth another word later — they say different
-things as you progress.
+things as you progress. It goes once they have nothing new left: the gym
+guide loses his the moment you beat the leader, because the advice he was
+offering is behind you.
 
 ![Two NPCs in the bike shop, each with a smile bubble](docs/screenshot-bikeshop.png)
 

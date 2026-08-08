@@ -191,11 +191,12 @@ do
   T.eq(classify(claimed, game()), 1, "unclaimed and reachable: a solid !")
 
   flags = { EVENT_GOT_TOWN_MAP = true }
-  -- no longer a gift, but their words still change with your progress, so
-  -- they drop to the smile rather than vanishing.  What matters is that
-  -- they do NOT stay a ! and do NOT become a come-back-later.
-  T.eq(classify(claimed, game()), 3,
-    "once claimed it falls to the smile, not a ! and not a later")
+  -- Claimed, and the branch that skipped the gift is decided for good: the
+  -- flag is true and nothing in the game clears it, so the line they say now
+  -- is the last one they will ever say.  The smile means "worth another word
+  -- later" and there is no later, so they fall silent rather than keeping it.
+  T.eq(classify(claimed, game()), nil,
+    "once claimed, and with nothing left that can change, no bubble at all")
 end
 
 do
@@ -1288,8 +1289,8 @@ do
   run.loader.events:emit("world.interacted",
     { mapId = "PEWTER_CITY", kind = "npc" })
   run.loader.exports.npc_bubbles.drawFor(liveOw.npcs[1], 0, 0)
-  T.eq(run.loader.exports.npc_bubbles.tiers().man, 3,
-    "after the talk settles it drops to the smile, without leaving the map")
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, nil,
+    "after the talk settles the bubble clears, without leaving the map")
 
   -- and it must NOT settle while the conversation is still up
   save.flags.EVENT_GOT_IT = nil
@@ -1305,7 +1306,7 @@ do
     "with a box still open it waits rather than rebuilding mid-conversation")
   run.loader.game.stack.top = function() return liveOw end
   run.loader.exports.npc_bubbles.drawFor(liveOw.npcs[1], 0, 0)
-  T.eq(run.loader.exports.npc_bubbles.tiers().man, 3,
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, nil,
     "and settles as soon as the box is gone")
 
   liveOw.npcs = {}

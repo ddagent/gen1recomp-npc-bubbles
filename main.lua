@@ -229,6 +229,14 @@ return function(mod)
       if type(row) == "table" and CONDITIONS[row[1]] then reactive = true break end
     end
 
+    -- Whether every branch taken is decided for good.  A flag that is true
+    -- now stays true -- only three flags in the whole game are ever cleared,
+    -- and all three belong to the FAN CLUB boast pair, who are a ? rather
+    -- than a smile.  So a path chosen by true flags can never choose
+    -- differently, and the dialogue at the end of it is the last thing this
+    -- NPC will ever say.  A FALSE check is not settled: it can still flip.
+    -- Nor is an item, which can be used or tossed.
+    local settled = true
     local pc, last, best, steps = 1, false, reactive and 3 or nil, 0
     while pc <= #prog and steps < MAX_STEPS do
       steps = steps + 1
@@ -238,6 +246,7 @@ return function(mod)
         local verb = row[1]
         local cond = condition(verb, row[2], game)
         if cond ~= nil then
+          if verb == "check_item" or not cond then settled = false end
           last = cond
           pc = pc + 1
         elseif OPTIMISTIC[verb] then
@@ -268,7 +277,7 @@ return function(mod)
         end
       end
     end
-    return best
+    return best, settled
   end
 
   -- Why a gift was not reachable -- which is the difference between "you
@@ -356,7 +365,7 @@ return function(mod)
       -- ! after being taken, and were only saved from showing it by the
       -- object being removed from the map.  Prerequisites live in items,
       -- dex counts and the world, and those are still faked generously.
-      flags = setmetatable({}, { __index = save.flags or {} }),
+      flags = {},
       -- ONE of everything, not ninety-nine.  Bag.add refuses when the
       -- quantity would pass 99 (src/inventory/Bag.lua), so a bag that
       -- answered 99 for every item made every gift bounce off "you have no
@@ -455,13 +464,19 @@ return function(mod)
   -- receipt.  Without this Melanie kept a faded ! forever after handing the
   -- BULBASAUR over, which is the exact stale bubble this was meant to avoid.
   local function alreadyClaimed(prog, game)
+    -- EVERY receipt, not any one of them.  An NPC can hold several separate
+    -- trades: the CELADON MART roof girl swaps three drinks for three TMs,
+    -- and taking the first one made her look spent while she still owed two.
+    -- One outstanding receipt means there is something left here.
+    local any, allClaimed = false, true
     for _, row in ipairs(prog or {}) do
-      if type(row) == "table" and row[1] == "set_flag"
-         and condition("check_flag", row[2], game) then
-        return true
+      if type(row) == "table"
+         and (row[1] == "set_flag" or row[1] == "receipt") then
+        any = true
+        if not condition("check_flag", row[2], game) then allClaimed = false end
       end
     end
-    return false
+    return any and allClaimed
   end
 
   -- A leader still owing a badge or a TM.  The badge lands with the win and
@@ -487,7 +502,7 @@ return function(mod)
   -- The tier an NPC is worth right now, including the not-yet case.
   -- `entry` is the original talk entry, needed to rebuild a closure.
   local function classify(prog, game, entry)
-    local tier = reachableTier(prog, game)
+    local tier, settled = reachableTier(prog, game)
     if tier == 1 or tier == 2 then return tier end
     -- a gift that exists but is out of reach, and has not been claimed
     if giftOutlook(prog, game) == "later" then return 4 end
@@ -498,6 +513,10 @@ return function(mod)
         return 4
       end
     end
+    -- Reacts to nothing any more: every branch that chose this line is
+    -- decided for good, and there is no gift or change left down it.  The
+    -- smile means "worth another word later", and there is no later.
+    if tier == 3 and settled then return nil end
     return tier
   end
 
@@ -728,16 +747,31 @@ return function(mod)
     -- "NO THANKS" exit carries none, and one purchase is enough to prove
     -- there is something to be had here.
     local FakeListMenu = { new = function(_, _, items, opts)
-      return { __probe = true, onDone = function()
+      -- ListMenu calls onChoose(item, self), and callers use that second
+      -- argument -- the CELADON MART roof girl opens with `list:close()`.
+      -- Passing only the item left it nil and the whole chain threw before
+      -- her TM was ever handed over, so she read as small talk.  The stand-in
+      -- hands itself across and answers close() like the real one.
+      local menu
+      menu = { __probe = true, close = function() end, onDone = function()
         local onChoose = type(opts) == "table" and opts.onChoose
         if type(onChoose) ~= "function" then return end
+        -- EVERY option, not just the first.  A menu can hold several
+        -- different trades and only some may still be open: the CELADON
+        -- MART roof girl swaps three drinks for three TMs, and picking only
+        -- FRESH WATER made her read as spent the moment TM13 was claimed,
+        -- while she still owed two more.  Taking each in turn lets the
+        -- watcher see whichever one is still live.
+        local tried = 0
         for _, item in ipairs(type(items) == "table" and items or {}) do
           if type(item) == "table" and item.value ~= nil then
-            onChoose(item)
-            return
+            tried = tried + 1
+            if tried > 8 then return end
+            pcall(onChoose, item, menu)
           end
         end
       end }
+      return menu
     end }
     -- the same willing answer the TextBox choice already gives
     local FakeChoiceBox = { new = function(_, onChoose)
@@ -785,6 +819,19 @@ return function(mod)
     for _, b in pairs(save.boxes or {}) do
       if type(b) == "table" then storedNow = storedNow + #b end
     end
+    -- Flags the closure WROTE.  The shadow starts empty with __index to the
+    -- base, so pairs() lists exactly what it set and nothing inherited.
+    -- Without these a closure's receipt never reached alreadyClaimed.
+    for name, value in pairs(save.flags) do
+      if value then
+        rows = rows or {}
+        -- "receipt", not "set_flag": alreadyClaimed reads it, the tier walker
+        -- does not.  Emitting set_flag made every flag-writing closure look
+        -- like a world change and promoted the museum ticket clerk to a ?.
+        rows[#rows + 1] = { "receipt", name }
+      end
+    end
+
     local gained = (#party - baseParty) + (storedNow - beforeStored)
     if gained > 0 then
       local last = party[#party]
@@ -792,6 +839,11 @@ return function(mod)
       rows[#rows + 1] = { "give_pokemon",
                           (type(last) == "table" and last.species) or "?" }
     end
+    -- A receipt on its own is not a finding.  It rides along with a gift so
+    -- alreadyClaimed can see what the closure would set; without one there is
+    -- nothing here, and returning rows anyway short-circuited the
+    -- unreadable-closure fallback and silenced the museum ticket clerk.
+    if rows and not hasGive(rows) then return nil end
     return rows
   end
 
@@ -881,7 +933,11 @@ return function(mod)
         -- wants 10, 30 and 50 species.  Ask once more with the prerequisites
         -- met and nothing claimed, and a real "come back later" falls out.
         local best = programFor(entry, permissive(game), npc)
-        if best and hasGive(best) and not alreadyClaimed(best, game) then
+        if best and hasGive(best) and alreadyClaimed(best, game) then
+          -- spent: it handed its gift over and set its own receipt, and the
+          -- receipt is already true.  Nothing left to say.
+          tiers[npc.id] = nil
+        elseif best and hasGive(best) then
           tiers[npc.id] = 4
         else
           -- A closure we cannot read is still a signal.  Ordinary NPCs have
