@@ -459,6 +459,18 @@ return function(mod)
       -- script write straight into the objects the world is drawing, and
       -- everything that needs one asks by index or by name
       ow.player = shade(real.player)
+      -- Turning somebody to face you is answered by doing nothing, which is
+      -- the whole point: the CERULEAN pair open with ow:facePlayer and threw
+      -- before saying a word, so the mod could not tell what they say.
+      ow.facePlayer = function() end
+      ow.faceObject = function() end
+      -- A FRESH list, never the live one.  Scripts guard on
+      -- #ow.scriptMoves before walking somebody, and the PEWTER youngster
+      -- appends to it as he escorts you to the gym.  An empty throwaway
+      -- answers the guard truthfully for a world that is not mid-walk, and
+      -- anything appended is discarded with it.
+      ow.scriptMoves = {}
+      ow.scriptMove = function() end
       return ow
     end
     if not generous then return ow end
@@ -718,6 +730,15 @@ return function(mod)
 
   local function observedGift(entry, game, npc, realOw)
     if type(entry) ~= "function" then return nil end
+    -- The NPC goes in shadowed, the same way npcByIndex hands one back.
+    -- Scripts call methods ON it -- the CERULEAN SLOWBRO and ELECTRODE open
+    -- with npc:facePlayer(ow.player) -- and the real object was going in
+    -- unwrapped, so probing them turned them to face the player in the
+    -- world.  Nothing reached the save, so the leak sweep never saw it.
+    -- Reads pass through; writes land on the shadow and go out with it.
+    if type(npc) == "table" then
+      npc = setmetatable({}, { __index = npc })
+    end
     local safeGame = (type(game) == "table" and game.__sandboxed) and game
                      or sandbox(game)
     local base = (safeGame and safeGame.save) or {}
@@ -875,6 +896,12 @@ return function(mod)
   function programFor(prog, game, npc, realOw)
     if type(prog) == "table" then return prog end
     if type(prog) ~= "function" then return nil end
+    -- Shadowed here as well as in observedGift: this runs the closure too,
+    -- and a script that calls a method ON the npc -- npc:facePlayer -- would
+    -- otherwise turn the real one while it was being classified.
+    if type(npc) == "table" then
+      npc = setmetatable({}, { __index = npc })
+    end
     local captured
     -- a caller may hand in an already-safe game (the best-case probe);
     -- copying it again would flatten the metatables it is built from
@@ -1054,6 +1081,24 @@ return function(mod)
     if entry == nil then return end
     local ok, said = pcall(saidNow, entry, game, npc, ow)
     if not (ok and type(said) == "string" and said ~= "") then return end
+
+    -- Ask twice more, with nothing changed in between.  Somebody whose line
+    -- is picked at random answers differently for no reason -- the CERULEAN
+    -- SLOWBRO, ELECTRODE and COOLTRAINER roll one of four, and the SS ANNE
+    -- chef rolls his main course -- and stamping that means the smile comes
+    -- back every time the roll lands elsewhere, which reads as the bubble
+    -- flickering.  Two matching answers is not proof of anything, but two
+    -- DIFFERENT answers is proof they vary on their own, and then any line
+    -- from them counts as heard.
+    local varies = false
+    for _ = 1, 2 do
+      local ok2, again = pcall(saidNow, entry, game, npc, ow)
+      if ok2 and type(again) == "string" and again ~= "" and again ~= said then
+        varies = true
+        break
+      end
+    end
+
     local roll = mod.save:get("heard")
     if type(roll) ~= "table" then roll = {} end
     -- Every line heard, not just the last.  The SS ANNE chef rolls his main
@@ -1061,7 +1106,13 @@ return function(mod)
     -- the next look and his smile would have sat there for good.  Collect
     -- them and he goes quiet once you have heard the lot.
     local seen = roll[key]
+    if seen == "varies" then return end          -- already known to wander
     if type(seen) ~= "table" then seen = {} end
+    if varies then
+      roll[key] = "varies"
+      mod.save:set("heard", roll)
+      return
+    end
     local mark = stamp(said)
     local n = 0
     for _ in pairs(seen) do n = n + 1 end
@@ -1081,6 +1132,8 @@ return function(mod)
     if type(roll) ~= "table" then return false end
     local key = heardKey(mapId, npc)
     local seen = key and roll[key]
+    -- heard once is heard, for somebody who never says the same thing twice
+    if seen == "varies" then return true end
     if type(seen) ~= "table" then return false end
     local ok, said = pcall(saidNow, entry, game, npc, ow)
     if not (ok and type(said) == "string" and said ~= "") then return false end

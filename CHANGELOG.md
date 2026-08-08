@@ -3,6 +3,22 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.2.1
+
+### Fixed
+
+- **A cleared smile came back on its own.** The CERULEAN SLOWBRO, ELECTRODE
+  and COOLTRAINER each pick one of four lines at random, and the SS ANNE chef
+  rolls his main course, so the next look usually found something different
+  and decided they had new to say. Talking to them repeatedly, or stepping
+  in and out of a building, made it flicker. The mod now asks twice more with
+  nothing changed in between: two different answers prove somebody varies on
+  their own, and from then on any line from them counts as heard.
+- **Probing an NPC could turn them round.** The two CERULEAN POKeMON open by
+  facing the player, and they were being handed the real object rather than a
+  stand-in -- so working out what bubble to draw physically turned them. It
+  never touched the save, which is why the save check never caught it.
+
 ## 2.2.0
 
 ### Added

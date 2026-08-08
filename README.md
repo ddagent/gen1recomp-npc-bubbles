@@ -74,6 +74,11 @@ bubbles at the size they appear over an NPC, so you can see which is which.
 - **No bubble does not always mean nothing.** A few interactions are written
   in a way the mod cannot read; those fall back to the smile, but the cover
   is not perfect.
+- **`CLEAR AFTER TALK` does not reach quite everyone.** A few people are
+  written in a way the mod cannot read, so their smile stays however often
+  you speak to them — your rival on the second floor of POKéMON TOWER is the
+  one you will actually notice. A handful of others say something different
+  every time you ask, so hearing them once counts as hearing them.
 - **"Later" can mean much later.** Some gifts are behind badges you will not
   have for hours, so a faded `!` may sit there a long time. Turn
   `LATER BUBBLE` off if that bothers you.
