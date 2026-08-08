@@ -3,6 +3,21 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.2.0
+
+### Added
+
+- **`CLEAR AFTER TALK`**, off by default. A smile clears once you have heard
+  what that person has to say, and comes back the moment they say something
+  new -- beat BROCK and the PEWTER gym guide's smile returns, because his
+  advice has changed. Only smiles: a `!`, a `?` or a faded `!` is never hidden
+  because you spoke to somebody.
+- It remembers every line it has heard, not just the last one. The SS ANNE
+  chef picks his main course at random, so he goes quiet once you have heard
+  all of his -- which takes a few visits.
+- Turning it back off restores every smile it had cleared. Nothing is lost by
+  changing your mind.
+
 ## 2.1.0
 
 ### Changed

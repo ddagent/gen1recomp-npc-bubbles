@@ -56,11 +56,15 @@ Set these in the in-game mod manager.
 | `FADED ! BUBBLE` | faded `!` — something here later | on |
 | `? BUBBLE` | `?` — the world changes | on |
 | `SMILE BUBBLE` | smile — they say new things as you progress | on |
+| `CLEAR AFTER TALK` | a smile clears once you have heard what they say, and returns when they say something new | off |
 | `HIDDEN BY WALLS` | hides a bubble whose NPC is behind a roof, in first and third person | off |
 | `LATER FADE` | how solid the faded `!` looks | 50 |
 
 If the smiles feel like too much, turn `SMILE BUBBLE` off first — it is the
-broadest one.
+broadest one. `CLEAR AFTER TALK` is the gentler version: instead of hiding
+them all, each one goes as you hear it, and comes back if that person starts
+saying something new. Only smiles are affected — a `!` never hides because
+you spoke to someone.
 
 There is also a guide in **START → OPTIONS → NPC BUBBLES** that draws the four
 bubbles at the size they appear over an NPC, so you can see which is which.

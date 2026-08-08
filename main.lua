@@ -140,6 +140,13 @@ return function(mod)
     -- 50, not 75.  The come-back-later ! has to read as subordinate to a
     -- real one at a glance, and three quarters opacity was close enough to
     -- solid that the two were hard to tell apart on the handheld.
+    -- Off by default: the smile is the one bubble that costs nothing to
+    -- ignore, and quietly hiding people because you walked past them once is
+    -- a bigger change than it sounds.  On, a smile clears once you have heard
+    -- what they have to say, and comes back the moment they say something
+    -- new -- which is what makes it safe to hide them at all.
+    { key = "heard", label = "CLEAR AFTER TALK", type = "toggle",
+      default = false },
     { key = "later_fade", label = "LATER FADE", type = "number",
       default = 50, min = 20, max = 100, step = 5 },
   })
@@ -149,6 +156,12 @@ return function(mod)
   local programFor
   -- and the deep copy every probe is based on, which lives with it
   local sandbox
+  -- rebuild asks whether a smile has already been heard; the roll and the
+  -- stamping live down with the interaction handling that fills them
+  local alreadyHeard
+  -- and both of those ask what an NPC would say, which needs the walker and
+  -- the probe, so it is defined with them further down
+  local saidNow
 
   -- ------- reading the live state the branches ask about
 
@@ -237,6 +250,11 @@ return function(mod)
     -- NPC will ever say.  A FALSE check is not settled: it can still flip.
     -- Nor is an item, which can be used or tossed.
     local settled = true
+    -- The lines actually reached on this walk, in order.  Their IDENTIFIERS,
+    -- never the rendered string: a rendered line moves for reasons that have
+    -- nothing to do with progress -- a player name, a translation -- and a
+    -- signature built on it would go stale for everybody at once.
+    local said = {}
     local pc, last, best, steps = 1, false, reactive and 3 or nil, 0
     while pc <= #prog and steps < MAX_STEPS do
       steps = steps + 1
@@ -269,6 +287,7 @@ return function(mod)
           -- step budget catches it either way
           pc = (to and to > pc) and to or (pc + 1)
         else
+          if verb == "show_text" then said[#said + 1] = tostring(row[2]) end
           if BATTLE_VERBS[verb] then last = true end
           if GIVES[verb] then
             if givePending(verb, row, game) then best = 1 end
@@ -277,7 +296,7 @@ return function(mod)
         end
       end
     end
-    return best, settled
+    return best, settled, table.concat(said, "|")
   end
 
   -- Why a gift was not reachable -- which is the difference between "you
@@ -711,6 +730,11 @@ return function(mod)
     end })
 
     local depth = 0
+    -- What it would say.  A closure pushes finished strings rather than text
+    -- ids, so unlike the walker this is the rendered line -- good enough to
+    -- notice when somebody starts saying something different, but it moves if
+    -- the player's name is substituted into it.
+    local heard = {}
     local probe = setmetatable({
       __sandboxed = true,
       save = save,
@@ -722,6 +746,7 @@ return function(mod)
           if type(box) ~= "table" then return end
           -- answer first, then close: a prompt's continuation IS the rest of
           -- the conversation, and the gift usually lives inside it
+          if box.text ~= nil then heard[#heard + 1] = tostring(box.text) end
           if type(box.choice) == "function" then box.choice(true) end
           if type(box.onDone) == "function" then box.onDone() end
         end,
@@ -843,8 +868,8 @@ return function(mod)
     -- alreadyClaimed can see what the closure would set; without one there is
     -- nothing here, and returning rows anyway short-circuited the
     -- unreadable-closure fallback and silenced the museum ticket clerk.
-    if rows and not hasGive(rows) then return nil end
-    return rows
+    if rows and not hasGive(rows) then return nil, table.concat(heard, "|") end
+    return rows, table.concat(heard, "|")
   end
 
   function programFor(prog, game, npc, realOw)
@@ -925,6 +950,11 @@ return function(mod)
         local tier = classify(prog, game, entry)
         -- a trainer keeps a gift, loses everything softer
         if isTrainer and tier ~= 1 and tier ~= 4 then tier = nil end
+        -- and a smile you have already heard is not news until it changes
+        if tier == 3 and mod.options:get("heard") == true
+           and alreadyHeard(map.id, npc, entry, game, ow) then
+          tier = nil
+        end
         tiers[npc.id] = tier
       elseif type(entry) == "function" and not isTrainer then
         -- Nothing to give TODAY -- but a closure gated on something you have
@@ -946,7 +976,12 @@ return function(mod)
           -- clerk, Misty, the badge house.  So it is not "unknown, show
           -- nothing", it is "something bespoke happens here": the smile.
           opaque[map.id .. "/" .. tostring(key)] = true
-          tiers[npc.id] = 3
+          if mod.options:get("heard") == true
+             and alreadyHeard(map.id, npc, entry, game, ow) then
+            tiers[npc.id] = nil
+          else
+            tiers[npc.id] = 3
+          end
         end
       end
     end
@@ -981,9 +1016,80 @@ return function(mod)
   -- Notice the A press instead.  It cannot be acted on at the time: when
   -- the press lands the conversation has not run yet, and the flag is
   -- written when the last box closes.  So it is remembered, and settled
+  -- A short stamp of a line, so the save holds a number per NPC rather than a
+  -- paragraph.  Plain arithmetic rather than a bitwise hash: LuaJIT is 5.1
+  -- and has no `~`.  The words are only ever compared for equality, and the
+  -- length is folded in so two different lines of the same characters cannot
+  -- collide as easily.
+  local function stamp(text)
+    local h = 5381
+    for i = 1, #text do
+      h = (h * 33 + text:byte(i)) % 4294967296
+    end
+    return h * 64 + (#text % 64)
+  end
+
+  local function heardKey(mapId, npc)
+    local text = npc and npc.def and npc.def.text
+    if not (mapId and text) then return nil end
+    return mapId .. "/" .. text
+  end
+
+  -- Recorded WHATEVER the toggle says, the way battle_dex records a species
+  -- it has met: switching the toggle on later should not replay every
+  -- conversation you have already had.
+  --
+  -- Taken after the conversation, not before -- if they handed something over
+  -- they are now saying something different, and that new line is what you
+  -- have heard.  Which is also why beating BROCK brings the gym guide's smile
+  -- back: his line moves, and the stamp no longer matches.
+  local function rememberHeard(npc)
+    local game = mod.world and mod.world.game
+    local ow = mod.world and mod.world:overworld()
+    local map = ow and ow.map
+    local key = map and heardKey(map.id, npc)
+    if not (game and key and mod.save) then return end
+    local view = MapScripts.get(map.id)
+    local entry = view and view.talk and view.talk[npc.def.text]
+    if entry == nil then return end
+    local ok, said = pcall(saidNow, entry, game, npc, ow)
+    if not (ok and type(said) == "string" and said ~= "") then return end
+    local roll = mod.save:get("heard")
+    if type(roll) ~= "table" then roll = {} end
+    -- Every line heard, not just the last.  The SS ANNE chef rolls his main
+    -- course at random each time you ask, so one stamp could never match on
+    -- the next look and his smile would have sat there for good.  Collect
+    -- them and he goes quiet once you have heard the lot.
+    local seen = roll[key]
+    if type(seen) ~= "table" then seen = {} end
+    local mark = stamp(said)
+    local n = 0
+    for _ in pairs(seen) do n = n + 1 end
+    -- bounded: a line carrying something genuinely unbounded -- a number, a
+    -- name -- must not grow the save without limit.  Past the cap it stops
+    -- collecting, and that NPC simply keeps a smile.
+    if seen[mark] == nil and n < 8 then seen[mark] = true end
+    roll[key] = seen
+    mod.save:set("heard", roll)
+  end
+
+  -- Only asked about an NPC already in the roll, so an NPC you have never
+  -- spoken to costs nothing -- for a closure this would otherwise mean a
+  -- third probe run on every rebuild.
+  function alreadyHeard(mapId, npc, entry, game, ow)
+    local roll = mod.save and mod.save:get("heard")
+    if type(roll) ~= "table" then return false end
+    local key = heardKey(mapId, npc)
+    local seen = key and roll[key]
+    if type(seen) ~= "table" then return false end
+    local ok, said = pcall(saidNow, entry, game, npc, ow)
+    if not (ok and type(said) == "string" and said ~= "") then return false end
+    return seen[stamp(said)] == true
+  end
+
   -- once the world has the player back -- no box on the stack, no script
   -- running, input unlocked.
-  local pendingTalk = false
+  local pendingTalk, pendingNpc = false, nil
   local function settle()
     if not pendingTalk then return end
     local game = mod.world and mod.world.game
@@ -995,10 +1101,16 @@ return function(mod)
     local runner = ow.runner
     if runner and runner.isRunning and runner:isRunning() then return end
     pendingTalk = false
+    local npc = pendingNpc
+    pendingNpc = nil
+    if npc then pcall(rememberHeard, npc) end
     markDirty()
   end
 
-  mod.events:on("world.interacted", function() pendingTalk = true end)
+  mod.events:on("world.interacted", function(ev)
+    pendingTalk = true
+    pendingNpc = (type(ev) == "table" and ev.kind == "npc") and ev.target or nil
+  end)
   mod.events:on("map.entered", rebuild)
   mod.events:on("map.reloaded", rebuild)
   mod.events:on("flag.changed", markDirty)
@@ -1120,6 +1232,21 @@ return function(mod)
 
   mod.exports.drawSigns = drawSigns
   mod.exports.signTiers = function() return signTiers end
+  -- What this NPC would say if you spoke to them right now, as a string that
+  -- changes when the words change and not otherwise.  Readable scripts answer
+  -- from the walk; a closure has to be run, and the probe already sees every
+  -- line it pushes -- it was throwing them away.
+  function saidNow(entry, game, npc, realOw)
+    if type(entry) == "table" then
+      local _, _, said = reachableTier(entry, game)
+      return said
+    end
+    if type(entry) ~= "function" then return nil end
+    local _, heard = observedGift(entry, game, npc, realOw)
+    return heard
+  end
+
+  mod.exports.saidNow = saidNow
   mod.exports.reachableTier = reachableTier
   mod.exports.programFor = programFor
   mod.exports.tiers = function() return tiers end

@@ -1351,5 +1351,96 @@ do
     "a static battle stays a world change")
 end
 
+-- ------- a smile you have already heard, and what brings it back
+--
+-- Off by default, so every case above ran with this switched off -- which is
+-- how two bugs in it survived a full suite: `alreadyHeard` and `saidNow` were
+-- both called before they were defined, and the second sat inside a pcall so
+-- it failed silently and simply did nothing.  Nothing here is reachable
+-- unless the toggle is on.
+do
+  local MapScripts = require("src.script.MapScripts")
+  MapScripts.attachBase("PEWTER_CITY", { talk = {
+    -- says one thing while you are carrying the ITEM and another when you are
+    -- not.  An item check never settles -- you can use or toss one -- so the
+    -- settled rule cannot silence him and this rule is visible on its own.
+    CHATTY = {
+      { "check_item", "BICYCLE" },
+      { "jump_if_false", 5 },
+      { "show_text", "_WithTheBike" },
+      { "jump", "end" },
+      { "show_text", "_WithoutTheBike" },
+    },
+  } })
+  MapScripts.invalidate("PEWTER_CITY")
+
+  liveOw.map = { id = "PEWTER_CITY" }
+  liveOw.player = { inputLocked = false }
+  liveOw.runner = { isRunning = function() return false end }
+  local save = run.loader.game.save
+  save.flags, save.inventory = {}, {}
+  save.pokedex = save.pokedex or { owned = {}, seen = {} }
+  run.loader.game.stack = run.loader.game.stack or {}
+  run.loader.game.stack.top = function() return liveOw end
+
+  local man = { id = "man", px = 0, py = 0, cellX = 0, cellY = 0,
+                def = { text = "CHATTY", name = "MAN", index = 1 } }
+  liveOw.npcs = { man }
+
+  local function tierNow()
+    run.loader.events:emit("map.entered", { map = "PEWTER_CITY" })
+    return run.loader.exports.npc_bubbles.tiers().man
+  end
+  local function talkTo()
+    run.loader.events:emit("world.interacted",
+      { mapId = "PEWTER_CITY", kind = "npc", target = man })
+    run.loader.exports.npc_bubbles.drawFor(man, 0, 0)
+  end
+
+  -- with the toggle OFF, talking changes nothing
+  run.loader.modOptions.npc_bubbles = { heard = false }
+  T.eq(tierNow(), 3, "a reactive NPC is a smile")
+  talkTo()
+  T.eq(tierNow(), 3, "and stays one while the toggle is off")
+
+  -- but the conversation was still recorded, so switching it on does not
+  -- make you re-visit everybody you have already spoken to
+  run.loader.modOptions.npc_bubbles = { heard = true }
+  T.eq(tierNow(), nil, "switching it on clears a smile already heard")
+
+  -- their line changes: the smile comes back
+  save.inventory.BICYCLE = 1
+  T.eq(tierNow(), 3, "when they start saying something new it returns")
+  talkTo()
+  T.eq(tierNow(), nil, "and clears again once that is heard too")
+
+  -- and turning it off restores everything, rather than only stopping new
+  -- clearing -- nothing is lost by changing your mind
+  run.loader.modOptions.npc_bubbles = { heard = false }
+  T.eq(tierNow(), 3, "turning it off brings every cleared smile back")
+
+  -- a gift is never hidden by it, however often you talk
+  run.loader.modOptions.npc_bubbles = { heard = true }
+  MapScripts.attachBase("PEWTER_CITY", { talk = {
+    GIVER = { { "give_item", "POTION" } },
+  } })
+  MapScripts.invalidate("PEWTER_CITY")
+  local giver = { id = "giver", px = 0, py = 0, cellX = 0, cellY = 0,
+                  def = { text = "GIVER", name = "GIVER", index = 2 } }
+  liveOw.npcs = { giver }
+  run.loader.events:emit("map.entered", { map = "PEWTER_CITY" })
+  T.eq(run.loader.exports.npc_bubbles.tiers().giver, 1, "a gift is a !")
+  run.loader.events:emit("world.interacted",
+    { mapId = "PEWTER_CITY", kind = "npc", target = giver })
+  run.loader.exports.npc_bubbles.drawFor(giver, 0, 0)
+  run.loader.events:emit("map.entered", { map = "PEWTER_CITY" })
+  T.eq(run.loader.exports.npc_bubbles.tiers().giver, 1,
+    "and talking to them does not hide it -- only smiles are cleared")
+
+  run.loader.modOptions.npc_bubbles = {}
+  liveOw.npcs = {}
+  save.flags, save.inventory = {}, {}
+end
+
 run.release()
 T.finish("npc_bubbles")

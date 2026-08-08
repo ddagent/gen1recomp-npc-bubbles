@@ -1,6 +1,7 @@
-# Plan: clearing a smile by talking
+# Clearing a smile by talking
 
-Not built. Written down so the reasoning survives.
+Built in 2.2.0 as `CLEAR AFTER TALK`, off by default. Kept as the record of
+why it works this way, and of what it still cannot do.
 
 ## The idea
 
@@ -75,3 +76,37 @@ both means you do not have to visit every gym guide once just to quiet them.
   classification
 - the save-serialisation test still passes: this writes to the mod's own
   bucket, never to the game's save
+
+
+## What shipped, and what it cannot do
+
+Built as described: the stamp is of the text IDENTIFIERS a readable script
+reaches, or of the lines a closure pushes. Two things were learned building
+it.
+
+**It remembers every line, not the last one.** The SS ANNE chef rolls his main
+course with `math.random`, so a single stamp could never match twice and his
+smile would have sat there for good. Collecting them means he goes quiet once
+you have heard the lot -- three or four visits, occasionally more. Bounded at
+8 lines per NPC so a line carrying something genuinely unbounded cannot grow
+the save without limit; past the cap that NPC simply keeps its smile.
+
+**Three NPCs cannot be heard at all.** CERULEANCITY_COOLTRAINER_F1,
+CERULEANCITY_ELECTRODE and PEWTERCITY_YOUNGSTER. They do speak -- the PEWTER
+youngster says "Follow me!" and walks you to the gym -- but their scripts
+reach for the overworld before the line is pushed, and the probe hands them a
+stub. Nothing is recorded for them, so their smile never clears. That is the
+right failure: when the mod cannot tell what somebody says, it leaves them
+visible rather than hiding them.
+
+## Traps found while building it
+
+- `sandbox()` caches its deep copy per game and only `rebuild` clears it. A
+  signature taken outside the rebuild path reads stale state.
+- Both `alreadyHeard` and `saidNow` were called above their definitions and
+  resolved to nil globals. The second sat inside a `pcall`, so it failed
+  silently and the feature simply did nothing -- no error, no stored roll.
+  Wrapping something defensively hid the bug that mattered.
+- The full suite passed throughout, because the toggle is off by default and
+  no test turned it on. A green suite proves nothing about code it never
+  reaches.
