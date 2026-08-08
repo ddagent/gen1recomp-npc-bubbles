@@ -843,8 +843,18 @@ return function(mod)
     -- it throws.  Discarding the run on that error threw away a gift that
     -- had already happened, and the giver came out a smile.  An error
     -- cannot un-give what the bag is already holding.
+    -- The runner's rows count as things said.  Some closures never push a
+    -- box at all -- the POKeMON TOWER rival hands his whole scene to
+    -- ow.runner:run -- and throwing the rows away meant the mod could not
+    -- tell what he says, so his smile could never clear.
     pcall(entry, probe,
-          probeOw(function() end, game and game.__permissive, realOw),
+          probeOw(function(_, rows)
+            for _, r in ipairs(type(rows) == "table" and rows or {}) do
+              if type(r) == "table" and r[1] == "show_text" then
+                heard[#heard + 1] = tostring(r[2])
+              end
+            end
+          end, game and game.__permissive, realOw),
           npc or {}, function() end)
     _G.require = realRequire
 

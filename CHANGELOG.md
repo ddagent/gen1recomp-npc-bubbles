@@ -3,6 +3,16 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.2.2
+
+### Fixed
+
+- **`CLEAR AFTER TALK` now reaches every smile in the game.** Some people
+  never push a line of their own -- they hand the whole scene over to be
+  played out, your rival on POKeMON TOWER 2F among them -- and the mod was
+  listening only for the first kind. It reads both now. Swept the game
+  again: no smile is left that talking cannot clear.
+
 ## 2.2.1
 
 ### Fixed
