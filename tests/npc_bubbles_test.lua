@@ -390,11 +390,146 @@ do
   end
 
   local prog = programFor(clerk, live)
-  T.eq(prog, nil, "an imperative closure yields no program")
+  -- It builds no rows, so the first probe sees nothing -- but it DOES put a
+  -- BICYCLE in the bag, and that is a gift.  The second probe watches the
+  -- copied bag and hands back the give_item row the closure never wrote, so
+  -- the same walker everything else uses can read it.
+  T.check(type(prog) == "table", "an imperative gift is still found")
+  T.eq(prog[1] and prog[1][1], "give_item", "as a give_item row")
+  T.eq(prog[1] and prog[1][2], "BICYCLE", "naming what it actually handed over")
+
   T.eq(pushed, 0, "and cannot push anything onto the real stack")
   T.check(wrote > 0, "it did run and did write -- to the copy, not the save")
   T.eq(live.save.inventory.BICYCLE, nil, "the real bag is untouched")
   T.eq(live.save.flags.EVENT_GOT_BICYCLE, nil, "and the real flags are too")
+end
+
+do
+  -- a closure that gives nothing must still yield nothing: the second probe
+  -- is for finding gifts, not for turning every unreadable NPC into one
+  local live = { save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local chatty = function(g) g.stack:push("just talking") end
+  T.eq(programFor(chatty, live), nil, "a closure that gives nothing yields nothing")
+end
+
+do
+  -- ------- a gift that throws AFTER handing it over
+  --
+  -- Both Mt Moon fossils and the museum scientist do the same thing: put the
+  -- item in the bag, then tidy the world up -- hide the exhibit, walk an NPC
+  -- away.  That tidying needs a real map, so against a probe it throws.
+  -- Checking whether the run succeeded threw away a gift that had already
+  -- landed, and every one of those givers came out a smile.
+  local live = { save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local giveThenDie = function(g)
+    g.save.inventory.BICYCLE = 1
+    error("hide_object: attempt to index field 'map' (a nil value)")
+  end
+  local prog = programFor(giveThenDie, live)
+  T.check(type(prog) == "table", "a gift is still found when the script throws after it")
+  T.eq(prog[1] and prog[1][2], "BICYCLE", "naming what reached the bag before the throw")
+  T.eq(live.save.inventory.BICYCLE, nil, "and the real bag is still untouched")
+
+  -- rows already handed to the runner survive the same way
+  local rowsThenDie = function(_, ow)
+    ow.runner:run({ { "give_item", "POTION" } })
+    error("boom")
+  end
+  local rows = programFor(rowsThenDie, live)
+  T.eq(rows and rows[1] and rows[1][2], "POTION",
+    "rows already given to the runner survive a later throw")
+end
+
+do
+  -- ------- a gate that lives in the WORLD, not in the save
+  --
+  -- The fossil shape: a trainer stands between you and the gift, and the
+  -- check reads the overworld rather than a flag.  The bare stub has no
+  -- trainerDefeated at all, so the call threw and the gift behind it was
+  -- never seen -- both fossils read as a smile.  The best-case probe now
+  -- gets a world that answers, the same willing path an `ask` already takes.
+  local live = { save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local guarded = function(g, ow)
+    if not ow:trainerDefeated(ow:npcByIndex(1)) then return end
+    g.save.inventory.BICYCLE = 1
+  end
+  -- today: no world given, so the guard cannot be answered and nothing is found
+  T.eq(programFor(guarded, live), nil, "with no world to ask, no gift is claimed")
+
+  -- today, with the real world: the guard answers truthfully
+  local beaten = false
+  local realOw = { trainerDefeated = function() return beaten end,
+                   npcByIndex = function(_, i) return { id = "n", def = { index = i } } end }
+  T.eq(programFor(guarded, live, nil, realOw), nil,
+    "the trainer still standing means no gift today")
+  beaten = true
+  local now = programFor(guarded, live, nil, realOw)
+  T.eq(now and now[1] and now[1][2], "BICYCLE",
+    "once he is beaten the gift is takeable now, not later")
+end
+
+do
+  -- ------- the probe must not write into the world it is reading
+  --
+  -- npcByIndex has to hand back the REAL object -- trainerDefeated keys on
+  -- its id -- so a script that turns an NPC to face it could turn one in the
+  -- world.  It comes back shadowed: reads pass through, writes go nowhere.
+  local live = { save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local realNpc = { id = "guard", def = { index = 1 }, facing = "down" }
+  local realOw = { trainerDefeated = function() return true end,
+                   npcByIndex = function() return realNpc end }
+  local rude = function(g, ow)
+    local n = ow:npcByIndex(1)
+    T.eq(n.facing, "down", "the shadow reads the real NPC through")
+    n.facing = "right"                  -- must not reach the world
+    g.save.inventory.BICYCLE = 1
+  end
+  programFor(rude, live, nil, realOw)
+  T.eq(realNpc.facing, "down", "a probe cannot turn an NPC in the world")
+end
+
+do
+  -- ------- the gift that only happens after the box is closed
+  --
+  -- The shape every hand-written giver uses: say a line, and hand the item
+  -- over in the "when the player closes this" callback.  A probe that
+  -- swallows the box never reaches the second half, which is why a free HM
+  -- read exactly like a remark about the weather.
+  local live = { save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local deferred = function(g)
+    local TextBox = require("src.render.TextBox")
+    g.stack:push(TextBox.new(g, "here you go", function()
+      require("src.inventory.Bag").add(g.save, "HM_FLY", 1)
+    end))
+  end
+  local prog = programFor(deferred, live)
+  T.check(type(prog) == "table", "a gift inside a callback is still found")
+  T.eq(prog[1] and prog[1][2], "HM_FLY", "and named correctly")
+  T.eq(live.save.inventory.HM_FLY, nil, "without touching the real bag")
+end
+
+do
+  -- ------- a question is answered, not left hanging
+  --
+  -- Oak's aides open by asking whether you have caught enough.  A probe that
+  -- only closes boxes never answers, so the branch holding the gift never
+  -- runs.  YES is the same willing path the walker takes for an `ask` row.
+  local live = { save = { flags = {}, inventory = {}, pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local asks = function(g)
+    local TextBox = require("src.render.TextBox")
+    g.stack:push(TextBox.new(g, "caught enough?", nil, { choice = function(yes)
+      if yes then require("src.inventory.Bag").add(g.save, "ITEMFINDER", 1) end
+    end }))
+  end
+  local prog = programFor(asks, live)
+  T.check(type(prog) == "table", "a gift behind a yes/no is found")
+  T.eq(prog[1] and prog[1][2], "ITEMFINDER", "by answering yes")
 end
 
 -- ------- the draw seam
@@ -862,7 +997,7 @@ do
         "the guide names its own palette rather than inheriting one")
 
       -- and the faded bubble is exempted from the recolour, because a
-      -- 75%-alpha blend falls between the four DMG shades and the palette
+      -- part-alpha blend falls between the four DMG shades and the palette
       -- pass has to round it to one of them
       local marked = 0
       local PaletteFX = require("src.render.PaletteFX")
@@ -900,6 +1035,319 @@ do
   T.eq(ownerOf({ render_pipelines = { _owners = { voxel = "" } } }),
     "DRAMATIC_SHAPE", "an empty owner is not a mod id")
   run.loader.exports.DRAMATIC_SHAPE = nil
+end
+
+-- ------- all three battle verbs are world changes
+--
+-- static_battle and rival_battle always were; start_battle was the odd one
+-- out, which left Oak's post-game rematch and the Fan Club chief resting on
+-- their set_flag alone to be worth anything.
+do
+  flags = {}
+  T.eq(tierOf({ { "static_battle", "VOLTORB" } }, game()), 2,
+    "a static battle is a world change")
+  T.eq(tierOf({ { "rival_battle", "OPP_RIVAL1" } }, game()), 2,
+    "so is a rival battle")
+  T.eq(tierOf({ { "start_battle", "OPP_PROF_OAK" } }, game()), 2,
+    "and so is a plain trainer battle")
+
+  -- Oak's shape: the rematch is behind the champion flag, so before the
+  -- post-game he is not worth crossing the map for and after it he is
+  local oak = {
+    { "check_flag", "EVENT_BEAT_CHAMPION_RIVAL" },
+    { "jump_if_false", 6 },
+    { "check_flag", "EVENT_BEAT_PROF_OAK" },
+    { "jump_if_true", 6 },
+    { "start_battle", "OPP_PROF_OAK" },
+    { "show_text", "hey, wait" },
+  }
+  T.eq(tierOf(oak, game()), 3, "before the champion, Oak is only talking")
+  flags = { EVENT_BEAT_CHAMPION_RIVAL = true }
+  T.eq(tierOf(oak, game()), 2, "post-game the rematch is reachable: a ?")
+  flags = { EVENT_BEAT_CHAMPION_RIVAL = true, EVENT_BEAT_PROF_OAK = true }
+  T.eq(tierOf(oak, game()), 3, "once beaten he drops back to talking")
+  flags = {}
+end
+
+-- ------- a POKeMON is a gift, and the probe must not keep it
+--
+-- give_pokemon calls Party.add(save.party, mon), which inserts into
+-- whatever list it is handed.  The shadow save read save.party straight
+-- through to the player's own, so probing a seller put a MAGIKARP in the
+-- real party and probing the day care raised a real member's level.
+do
+  local realParty = { { species = "PIKACHU", level = 5 } }
+  local live = { save = { flags = {}, inventory = {}, party = realParty,
+                          pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  local seller = function(g)
+    table.insert(g.save.party, { species = "MAGIKARP", level = 5 })
+    g.save.party[1].level = 99          -- the day care edits an existing mon
+  end
+  local prog = programFor(seller, live)
+  T.eq(prog and prog[1] and prog[1][1], "give_pokemon",
+    "a POKeMON handed over is found, though it never touches the bag")
+  T.eq(prog and prog[1] and prog[1][2], "MAGIKARP", "naming which one")
+  T.eq(#realParty, 1, "and the real party did not grow")
+  T.eq(realParty[1].level, 5, "nor was a real POKeMON edited")
+end
+
+-- ------- menus get answered, and a shop is a shop when you are broke
+do
+  local live = { save = { flags = {}, inventory = {}, party = {}, money = 0,
+                          pokedex = { owned = {} } },
+                 stack = { push = function() end } }
+  -- the vending machine's shape: a priced list, and the purchase lives in
+  -- the callback the list never got to run
+  local machine = function(g)
+    local ListMenu = require("src.ui.ListMenu")
+    g.stack:push(ListMenu.new(g, "VENDING MACHINE", {
+      { label = "FRESH WATER", value = { id = "FRESH_WATER", price = 200 } },
+      { label = "NO THANKS" },
+    }, { onChoose = function(item)
+      if g.save.money < item.value.price then return end
+      g.save.money = g.save.money - item.value.price
+      g.save.inventory[item.value.id] = 1
+    end }))
+  end
+  local prog = programFor(machine, live)
+  T.eq(prog and prog[1] and prog[1][2], "FRESH_WATER",
+    "a list menu is answered, so the purchase behind it is found")
+  T.eq(live.save.money, 0, "with the real wallet untouched")
+
+  -- the trailing "NO THANKS" carries no value and must not be picked
+  local onlyExit = function(g)
+    local ListMenu = require("src.ui.ListMenu")
+    g.stack:push(ListMenu.new(g, "MENU", { { label = "NO THANKS" } },
+      { onChoose = function() g.save.inventory.NOPE = 1 end }))
+  end
+  T.eq(programFor(onlyExit, live), nil, "a menu with no real row picks nothing")
+end
+
+-- ------- a leader's badge and TM are not in their script at all
+--
+-- Sight engagement skips anyone carrying a talk script, and every leader has
+-- one, so nothing announces them -- and the rewards are paid from the
+-- victories table, so no row can be read to find them either.
+do
+  local MapScripts = require("src.script.MapScripts")
+  MapScripts.attachBase("PEWTER_CITY",
+    { talk = { LEADER = { { "show_text", "post-battle advice" } } } })
+  MapScripts.invalidate("PEWTER_CITY")
+
+  -- an earlier case parks liveOw.map at nil to prove the draw survives it
+  liveOw.map = { id = "PEWTER_CITY" }
+  local save = run.loader.game.save
+  save.inventory = save.inventory or {}
+  save.pokedex = save.pokedex or { owned = {}, seen = {} }
+  save.flags = {}
+  liveOw.npcs = { { id = "brock", px = 0, py = 0, cellX = 0, cellY = 0,
+                    def = { text = "LEADER", name = "PEWTERGYM_BROCK",
+                            index = 1, trainerClass = "OPP_BROCK",
+                            trainerParty = 1 } } }
+  local function tierNow()
+    run.loader.events:emit("map.entered", { map = "PEWTER_CITY" })
+    return run.loader.exports.npc_bubbles.tiers().brock
+  end
+  T.eq(tierNow(), 1, "a leader still owing a badge is a !")
+
+  save.flags.EVENT_BEAT_BROCK = true
+  T.eq(tierNow(), 1, "beaten but the TM not handed over is still a !")
+
+  save.flags.EVENT_GOT_TM34 = true
+  T.eq(tierNow(), nil, "badge and TM both collected: nothing left to say")
+
+  -- someone with a trainer header but no rewards of their own
+  liveOw.npcs[1].def.trainerClass = "OPP_LANCE"
+  save.flags = {}
+  T.eq(tierNow(), nil, "a trainer whose victory pays nothing stays quiet")
+
+  liveOw.npcs = {}
+  save.flags = {}
+end
+
+-- ------- nothing a probe does may reach the real save, at any depth
+--
+-- Not a list of fields I remembered to shadow -- that list is exactly what
+-- went wrong.  hide_object writes save.objectToggles[map][name], mark_seen
+-- writes save.pokedex.seen[species], a hidden item writes save.hiddenTaken,
+-- and none of those were named anywhere.  The barrier is that every probe
+-- reads from the rebuild's deep copy, so a write at any depth lands there.
+-- This serialises the whole save before and after and compares.
+do
+  local function dump(v, out, seen)
+    if type(v) ~= "table" then out[#out+1] = type(v) .. ":" .. tostring(v) return end
+    if seen[v] then out[#out+1] = "<cycle>" return end
+    seen[v] = true
+    local keys = {}
+    for k in pairs(v) do keys[#keys+1] = k end
+    table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+    out[#out+1] = "{"
+    for _, k in ipairs(keys) do
+      out[#out+1] = tostring(k) .. "="
+      dump(v[k], out, seen)
+      out[#out+1] = ","
+    end
+    out[#out+1] = "}"
+    seen[v] = nil
+  end
+  local function snapshot(v) local o = {}; dump(v, o, {}); return table.concat(o) end
+
+  local realSave = {
+    player = { name = "ASH" }, money = 4893, coins = 250,
+    flags = { EVENT_GOT_STARTER = true },
+    inventory = { POTION = 5, COIN_CASE = 1 },
+    party = { { species = "PIKACHU", level = 12, moves = { "THUNDERSHOCK" } } },
+    boxes = { { { species = "RATTATA", level = 3 } }, {} },
+    pokedex = { seen = { PIKACHU = true }, owned = { PIKACHU = true } },
+    objectToggles = { VIRIDIAN_CITY = { OLD_MAN = false } },
+    hiddenTaken = { ["ROUTE_1_5_5"] = true },
+    daycare = { species = "PIKACHU", level = 12 },
+    safari = { steps = 300, balls = 20 },
+  }
+  local before = snapshot(realSave)
+  local live = { save = realSave, stack = { push = function() end } }
+
+  -- everything a real script has been seen to do, all at once
+  local hostile = function(g)
+    local s = g.save
+    s.money = 0
+    s.coins = 0
+    s.inventory.POTION = 99
+    s.inventory.MASTER_BALL = 99
+    s.flags.EVENT_GOT_STARTER = false
+    s.flags.EVENT_BEAT_LANCE = true
+    s.pokedex.seen.MEWTWO = true                      -- mark_seen
+    s.pokedex.owned.MEWTWO = true
+    s.objectToggles.VIRIDIAN_CITY.OLD_MAN = true      -- hide_object, depth 2
+    s.objectToggles.NEW_MAP = { THING = false }
+    s.hiddenTaken["ROUTE_2_1_1"] = true
+    s.daycare.level = 99                              -- depth 2 on a record
+    s.safari.balls = 0
+    s.party[1].level = 99                             -- a real POKeMON
+    table.insert(s.party, { species = "MAGIKARP", level = 5 })
+    table.insert(s.boxes[1], { species = "ZUBAT", level = 9 })
+    s.boxes[2][1] = { species = "ODDISH", level = 4 }
+    s.player.name = "HACKED"
+  end
+
+  programFor(hostile, live)
+  T.eq(snapshot(realSave), before,
+    "a probe cannot write into the real save, at any depth")
+
+  -- and the same closure through the best-case probe, which is built from
+  -- metatables rather than a copy
+  local classify2 = classify
+  local prog = programFor(hostile, live)
+  if prog then classify2(prog, live, hostile) end
+  T.eq(snapshot(realSave), before, "nor through the best-case probe")
+end
+
+-- ------- a gift that writes its own flag still clears the bubble
+--
+-- flag.changed comes from Flags.set, and the shared gift() helper assigns
+-- game.save.flags[...] straight out, so nothing tells the mod anything
+-- happened.  The ROUTE 1 POTION man kept his ! after handing it over until
+-- the map changed.  The A press is remembered and settled once the world
+-- has the player back.
+do
+  liveOw.map = { id = "PEWTER_CITY" }
+  local MapScripts = require("src.script.MapScripts")
+  local save = run.loader.game.save
+  save.flags = {}
+  save.inventory = save.inventory or {}
+  save.pokedex = save.pokedex or { owned = {}, seen = {} }
+
+  MapScripts.attachBase("PEWTER_CITY", { talk = { SNEAK = {
+    { "check_flag", "EVENT_GOT_IT" },
+    { "jump_if_true", 6 },
+    { "give_item", "POTION" },
+    { "set_flag", "EVENT_GOT_IT" },
+    { "jump", "end" },
+    { "show_text", "generic chat" },
+  } } })
+  MapScripts.invalidate("PEWTER_CITY")
+
+  liveOw.npcs = { { id = "man", px = 0, py = 0, cellX = 0, cellY = 0,
+                    def = { text = "SNEAK", name = "MAN", index = 1 } } }
+  liveOw.player = { inputLocked = false }
+  liveOw.runner = { isRunning = function() return false end }
+  run.loader.game.stack = run.loader.game.stack or {}
+  run.loader.game.stack.top = function() return liveOw end
+
+  run.loader.events:emit("map.entered", { map = "PEWTER_CITY" })
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, 1, "unclaimed: a !")
+
+  -- the conversation happens: the flag is written WITHOUT Flags.set, so no
+  -- flag.changed is emitted -- exactly what gift() does
+  save.flags.EVENT_GOT_IT = true
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, 1,
+    "nothing has told the mod yet, so the stale ! is still there")
+
+  -- the A press is what tells it, once the world is idle again
+  run.loader.events:emit("world.interacted",
+    { mapId = "PEWTER_CITY", kind = "npc" })
+  run.loader.exports.npc_bubbles.drawFor(liveOw.npcs[1], 0, 0)
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, 3,
+    "after the talk settles it drops to the smile, without leaving the map")
+
+  -- and it must NOT settle while the conversation is still up
+  save.flags.EVENT_GOT_IT = nil
+  run.loader.events:emit("map.entered", { map = "PEWTER_CITY" })
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, 1, "a ! again")
+  local box = { isBox = true }
+  run.loader.game.stack.top = function() return box end
+  run.loader.events:emit("world.interacted",
+    { mapId = "PEWTER_CITY", kind = "npc" })
+  save.flags.EVENT_GOT_IT = true
+  run.loader.exports.npc_bubbles.drawFor(liveOw.npcs[1], 0, 0)
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, 1,
+    "with a box still open it waits rather than rebuilding mid-conversation")
+  run.loader.game.stack.top = function() return liveOw end
+  run.loader.exports.npc_bubbles.drawFor(liveOw.npcs[1], 0, 0)
+  T.eq(run.loader.exports.npc_bubbles.tiers().man, 3,
+    "and settles as soon as the box is gone")
+
+  liveOw.npcs = {}
+  save.flags = {}
+end
+
+-- ------- three gifts that never went out
+do
+  flags = {}
+
+  -- A shop is not a gift.  open_mart never stops being true, so the one
+  -- clerk who opens one wore a ! for the rest of the save.
+  T.eq(tierOf({ { "check_flag", "X" }, { "open_mart", "SHOP" } }, game()), 3,
+    "opening a shop is not receiving something")
+  T.eq(tierOf({ { "heal_party" } }, game()), 1,
+    "but healing still is -- it is given, not sold")
+
+  -- A trade names the flag it sets as its own third argument, and nothing
+  -- was reading it.
+  local swap = { { "trade", 1, "EVENT_TRADED_IT" } }
+  T.eq(tierOf(swap, game()), 1, "an unfinished trade is a !")
+  flags.EVENT_TRADED_IT = true
+  T.eq(tierOf(swap, game()), nil, "a finished one is not")
+  flags = {}
+
+  -- A battle's outcome is decided at the time, like an `ask`.  The row
+  -- after it asks "did you LOSE?", and answering that with a stale flag
+  -- reading walked the losing path and never saw the reward.
+  local thief = {
+    { "check_flag", "EVENT_BEAT_HIM" },
+    { "jump_if_true", 6 },
+    { "start_battle", "trainer", "OPP_ROCKET", 5 },
+    { "jump_if_false", "end" },
+    { "give_item", "TM_DIG" },
+    { "show_text", "already done" },
+  }
+  T.eq(tierOf(thief, game()), 1,
+    "the walk assumes you win, so the TM behind the battle is found")
+
+  -- a static battle is still a world change, not a person to fight
+  T.eq(tierOf({ { "static_battle", "VOLTORB" } }, game()), 2,
+    "a static battle stays a world change")
 end
 
 run.release()

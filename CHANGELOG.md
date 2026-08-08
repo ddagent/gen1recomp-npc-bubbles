@@ -3,6 +3,95 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.0.1
+
+### Added
+
+- **Signs can carry a bubble.** They are not NPCs -- they live in
+  `map.signs` and are answered by `signAtCell` -- so nothing iterated them
+  and nothing drew them. The six FUCHSIA dex placards, the only signs in
+  the game that hand you anything, had no marker at all. Only the `!` ones
+  are drawn: a smile on a sign could never clear, because the game writes
+  down nothing when you read one.
+- **Gym leaders show a `!` while they still owe you a badge or a TM.**
+  Sight engagement skips anyone carrying a talk script and every leader has
+  one, so nothing announces them -- and their scripts cannot say so either,
+  since the rewards are paid from `data/scripts/victories.lua` rather than
+  from any row. All eight, and each goes quiet once both receipts are in.
+- **A POKeMON handed over counts as a gift.** The watcher only read the
+  bag, so the MAGIKARP salesman, the GAME CORNER's mon counters and the
+  SILPH worker's LAPRAS all looked like they did nothing.
+- **Menus get answered.** The probe already said yes to a yes/no; a list it
+  could not answer just sat there unpicked, which is why the CELADON
+  vending machines -- shops -- read as small talk.
+
+### Changed
+
+- `LATER FADE` defaults to 50 rather than 75. Three quarters opacity was
+  close enough to solid that a come-back-later `!` was hard to tell from a
+  real one on the handheld.
+
+### Fixed
+
+- **The VIRIDIAN MART clerk stopped wearing a permanent `!`.** Opening a
+  shop is no longer counted as receiving something -- buying is not being
+  given, and a shop never runs out, so no flag could ever clear him. He now
+  shows a `!` for the one thing he really does hand over, OAK's PARCEL, and
+  a smile once he is just a shop. Healing is untouched: that is given, not
+  sold, so MOM and the SILPH nurse keep theirs.
+- **A gift behind a battle is visible before the fight.** The row after a
+  battle asks "did you LOSE?", and that was answered with whatever stale
+  reading the last flag check left behind -- so the walk took the losing
+  path and never saw what came after. The CERULEAN thief's TM28 sat behind
+  exactly that, leaving him unmarked until after he was beaten, by which
+  point the TM had already been handed over in the same breath. The walk now
+  assumes you win, for the same reason it assumes yes to an `ask`.
+- **A finished trade stops asking.** A trade names the flag it sets as its
+  own third argument, and nothing was reading it, so all six in-game trades
+  kept their `!` for the rest of the save.
+
+
+- **A bubble over somebody with nothing to give.** `jump "end"` is the
+  engine's reserved halt (ScriptRunner), not a label anyone declares. The
+  walker read it as an unresolvable label and fell through to the next
+  line -- straight into the branch the script had just decided to skip.
+  MOM's `heal_party` sits immediately after the `jump "end"` that ends the
+  no-starter path, so a brand new save showed a `!` over her; OAK did the
+  same after the rival battle. 25 scripts use that halt.
+- **A gift that hands itself over kept its `!`.** `flag.changed` is emitted
+  by `Flags.set`, and the shared `gift()` helper assigns
+  `save.flags[...] = true` directly, so nothing told the mod anything had
+  happened -- the ROUTE 1 POTION man stayed marked until the map changed.
+  The A press is noticed instead and settled once the world has the player
+  back: no box on the stack, no script running, input unlocked. It
+  deliberately does not settle mid-conversation.
+
+
+
+- **A probe could write into the real save.** `give_pokemon` calls
+  `Party.add(save.party, mon)`, and the sandbox read `party` straight
+  through to the player's own list: probing a seller put a MAGIKARP in the
+  party and probing the day care raised a real POKeMON's level. Every probe
+  now reads from the rebuild's deep copy, so a write at any depth lands
+  there -- which also closed leaks nobody had named, including the object
+  toggles a `hide_object` writes. There is a test that serialises the whole
+  save before and after and fails on any difference.
+- **A dex sign stops asking once you have the entry.** `mark_seen` counted
+  as a gift unconditionally, which would have left the FUCHSIA placards
+  marked forever; and if you met the species in the wild first, the sign
+  never speaks up at all.
+- **A gift behind a world gate is found.** Both MT MOON fossils sit behind
+  `superNerdBeaten(ow)`, and the best-case probe was handed an empty world,
+  so the call threw and the fossil behind it was never seen. They now read
+  as come-back-later while he is standing and a solid `!` once he is not.
+- **A gift survives a script that throws after handing it over.** The
+  museum scientist gives the OLD AMBER and then hides the exhibit, which
+  needs a real map; the run was discarded on that error and the giver came
+  out a smile.
+- Money and coins are stood in for while probing, so a shop reads as a shop
+  whether or not you can afford it today -- matching `open_mart`, which was
+  already unconditional.
+
 ## 1.9.0
 
 ### Added

@@ -17,20 +17,38 @@
 -- the map, because in both cases the give_item is unreachable.
 
 local MapScripts = require("src.script.MapScripts")
+-- Badges and TMs are NOT in a leader's talk script -- that only decides
+-- which line they say.  The rewards live in their own table, keyed by the
+-- same "OPP_CLASS#party" the map object already carries, which is how the
+-- engine pays them out (OverworldState:checkVictoryRewards).
+local Victories = require("data.scripts.victories")
 -- only the guide screen needs this; the bubbles themselves are sprite draws
 local Font = require("src.render.Font")
 
 -- Tier 1: you receive something.
 local GIVES = {
   give_item = true, give_pokemon = true, give_money = true,
-  trade = true, open_mart = true, heal_party = true,
+  trade = true, heal_party = true,
+  -- open_mart is NOT here.  Buying is not receiving, and a shop never runs
+  -- out -- so the one clerk in the game who opens one (VIRIDIAN MART) wore
+  -- a ! for the rest of the save, long after the only thing he actually
+  -- hands over, OAK's PARCEL, was collected.  Healing stays: it is given,
+  -- not sold.
+  -- A dex entry is something you receive and cannot lose.  Every use of
+  -- this in the game is an exhibit -- the Fuchsia zoo signs, and the
+  -- gentleman on the S.S. ANNE who shows you a sleeping SNORLAX -- and each
+  -- one was showing no bubble at all.
+  mark_seen = true,
 }
 
 -- Tier 2: the world changes.  These write; tier 3 only reads.
 local CHANGES = {
   set_flag = true, hide_object = true, show_object = true,
-  replace_block = true, static_battle = true, rival_battle = true,
-  warp = true,
+  replace_block = true, warp = true,
+  -- All three battle verbs, not two.  A fight you can be put in is a change
+  -- to the world whoever it is with -- the Voltorb that stops blocking the
+  -- corridor, the rival who walks off, Oak's post-game rematch.
+  static_battle = true, rival_battle = true, start_battle = true,
 }
 
 -- EXCLAMATION_BUBBLE, QUESTION_BUBBLE, SMILE_BUBBLE -- the three 16x16
@@ -48,7 +66,7 @@ local TIER_OPTION = { "gift", "event", "story", "later" }
 -- The three commands that read your state.  A program containing one is
 -- one whose dialogue can differ depending on what you have done -- which is
 -- exactly what the smile is for.
-local CONDITIONS = { check_flag = true, check_item = true, check_dex_owned = true }
+local CONDITIONS = { check_flag = true, check_item = true, check_dex_owned = true, dex_rating = true }
 
 -- Commands whose result is decided in the moment rather than read off the
 -- save: a prompt the player answers, and a gift that either lands or finds
@@ -58,8 +76,31 @@ local OPTIMISTIC = {
   give_item = true, give_pokemon = true, give_money = true, trade = true,
 }
 
+-- What a probe is given to spend.  Money is not progress -- open_mart is
+-- already a gift whatever the wallet holds, so a Mart clerk shows a ! at
+-- zero yen and a vending machine two floors up did not.  Nothing in the
+-- game gates permanently on price (the bicycle wants a voucher, not
+-- money), so a full wallet cannot invent a gift that is not there.
+--
+-- Finite, not math.huge: the Game Corner clerk prints the balance with %d
+-- and the prize counter prints the coin total the same way, and inf throws
+-- there -- before the purchase, so the gift behind it would be lost.
+-- Coins sit between the dearest prize (7700, TM SUBSTITUTE) and the point
+-- the coin case reports itself full (9990), so both counters work.
+local PLENTY_MONEY, PLENTY_COINS = 999999, 9500
+
 -- a script that jumps backwards could spin forever; no vanilla one does,
 -- but this runs every time a flag changes and must not be able to hang
+-- A fight you can be put in, whoever it is with.  The walk assumes you
+-- win, for the same reason it assumes yes to an `ask`: the outcome is
+-- decided at the time, not read off the save, and a player who wants the
+-- thing takes that branch.  Without it `jump_if_false "end"` after a battle
+-- -- "if you LOST, stop" -- was answered with whatever stale value the last
+-- flag check left behind, so the walk took the losing path and never saw
+-- what came after.  The CERULEAN thief's TM28 sat behind exactly that.
+local BATTLE_VERBS = { start_battle = true, rival_battle = true,
+                       static_battle = true }
+
 local MAX_STEPS = 400
 
 return function(mod)
@@ -96,13 +137,18 @@ return function(mod)
     -- can switch on is fine.  Only does anything on the free-cam rungs.
     { key = "hide_walls", label = "HIDDEN BY WALLS", type = "toggle",
       default = false },
+    -- 50, not 75.  The come-back-later ! has to read as subordinate to a
+    -- real one at a glance, and three quarters opacity was close enough to
+    -- solid that the two were hard to tell apart on the handheld.
     { key = "later_fade", label = "LATER FADE", type = "number",
-      default = 75, min = 20, max = 100, step = 5 },
+      default = 50, min = 20, max = 100, step = 5 },
   })
 
   -- forward declaration: classify needs to rebuild a closure, and the
   -- builder is defined further down with the rest of the map handling
   local programFor
+  -- and the deep copy every probe is based on, which lives with it
+  local sandbox
 
   -- ------- reading the live state the branches ask about
 
@@ -125,6 +171,29 @@ return function(mod)
     return nil          -- not a condition
   end
 
+  -- Most gifts announce they are spent by setting a flag the same script
+  -- also checks, which giftOutlook reads.  Two do not, and each carries its
+  -- own receipt instead:
+  --
+  --   mark_seen  -- nothing writes a flag when you read the CHANSEY sign,
+  --                 but CHANSEY is in the POKeDEX afterwards and stays
+  --                 there.  So the placard goes quiet once it has nothing
+  --                 left to tell you, and never speaks up at all if you met
+  --                 the species in the wild first.
+  --   trade      -- the flag it sets is its own third argument, and nothing
+  --                 was reading it: every finished in-game trade kept its !
+  --                 for the rest of the save.
+  local function givePending(verb, row, game)
+    if verb == "mark_seen" then
+      local dex = game and game.save and game.save.pokedex
+      return not (dex and dex.seen and dex.seen[row[2]])
+    end
+    if verb == "trade" then
+      return not condition("check_flag", row[3], game)
+    end
+    return true
+  end
+
   -- Walks the program from the top and returns the highest tier reachable
   -- on the path the branches actually take.  Pure reads: no command is
   -- executed, only classified.
@@ -136,7 +205,16 @@ return function(mod)
         labels[row[2]] = i
       end
     end
+    -- "end" is the engine's reserved halt, not a label anybody declares
+    -- (ScriptRunner: `if jump == "end" then` stops the script).  Reading it
+    -- as an unresolvable label and falling through to the next line walked
+    -- straight into the branch the script had just decided to skip -- MOM's
+    -- heal_party sits immediately after the `jump "end"` that ends the
+    -- no-starter path, so a brand new save showed a ! over somebody with
+    -- nothing to give, and OAK did the same after the rival battle.
+    local HALT = #prog + 1
     local function target(v)
+      if v == "end" then return HALT end
       if type(v) == "number" then return v end
       return labels and labels[v] or nil
     end
@@ -170,7 +248,7 @@ return function(mod)
           -- you had declined every gift that asks first, which is how
           -- Melanie's Bulbasaur went invisible.
           last = true
-          if GIVES[verb] then best = 1 end
+          if GIVES[verb] and givePending(verb, row, game) then best = 1 end
           pc = pc + 1
         elseif verb == "jump_if_true" then
           pc = last and (target(row[2]) or (pc + 1)) or (pc + 1)
@@ -182,7 +260,9 @@ return function(mod)
           -- step budget catches it either way
           pc = (to and to > pc) and to or (pc + 1)
         else
-          if GIVES[verb] then best = 1
+          if BATTLE_VERBS[verb] then last = true end
+          if GIVES[verb] then
+            if givePending(verb, row, game) then best = 1 end
           elseif CHANGES[verb] and best ~= 1 then best = 2 end
           pc = pc + 1
         end
@@ -206,14 +286,20 @@ return function(mod)
   -- halves are real rather than one being a rounding error.
   local function giftOutlook(prog, game)
     local hasGive, sets, checks = false, {}, {}
+    local pending = false
     for _, row in ipairs(prog) do
       if type(row) == "table" then
-        if GIVES[row[1]] then hasGive = true end
+        if GIVES[row[1]] then
+          hasGive = true
+          if givePending(row[1], row, game) then pending = true end
+        end
         if row[1] == "set_flag" then sets[row[2]] = true end
         if row[1] == "check_flag" then checks[row[2]] = true end
       end
     end
     if not hasGive then return nil end
+    -- every gift here was a dex entry and you already hold them all
+    if not pending then return "done" end
     for name in pairs(sets) do
       if checks[name] and condition("check_flag", name, game) then
         return "done"
@@ -231,14 +317,60 @@ return function(mod)
   -- it, so an unmet prerequisite means the give row is simply absent and
   -- there is nothing to find.  Building the program a second time against a
   -- save that meets everything reveals whether a gift exists at all.
+  -- A dex that can be COUNTED, built from the live species registry.
+  --
+  -- The distinction that matters: a metatable answers a lookup but iterates
+  -- to nothing, and the gates that decide a gift often count -- Oak's aides
+  -- want 10, 30 and 50 species owned, and check_dex_owned walks pairs().  A
+  -- faked dex therefore claimed to own everything and counted zero, so those
+  -- three could never show anything.
+  --
+  -- Built from game.data.pokemon rather than a list in this file, so a mod
+  -- that adds species is covered the moment it registers them, and so is a
+  -- total conversion that replaces them all.
+  local dexCache, dexCacheFor = nil, nil
+  local function everySpecies(data)
+    if dexCacheFor == data and dexCache then return dexCache end
+    local owned = {}
+    for id in pairs((data and data.pokemon) or {}) do
+      if type(id) == "string" then owned[id] = true end
+    end
+    dexCacheFor, dexCache = data, { seen = owned, owned = owned }
+    return dexCache
+  end
+
   local function permissive(game)
-    local save = (game and game.save) or {}
+    -- the rebuild's deep copy, never the live save: everything this does
+    -- not name explicitly falls through, and a fall-through write at any
+    -- depth would land in the player's own file
+    local safe = (type(game) == "table" and game.__sandboxed) and game
+                 or sandbox(game)
+    local save = (safe and safe.save) or {}
+    local dex = everySpecies(game and game.data)
     local fake = setmetatable({
-      flags = setmetatable({}, { __index = function() return false end }),
-      inventory = setmetatable({}, { __index = function() return 99 end }),
+      -- REAL flags, not a blanket false.  A flag is the receipt: it is how
+      -- the game records what you have already collected.  Blanking them
+      -- makes the best case re-offer everything you have ever claimed, and
+      -- a closure's receipt never shows up in the synthesised rows, so
+      -- alreadyClaimed cannot catch it -- both Mt Moon fossils kept a faded
+      -- ! after being taken, and were only saved from showing it by the
+      -- object being removed from the map.  Prerequisites live in items,
+      -- dex counts and the world, and those are still faked generously.
+      flags = setmetatable({}, { __index = save.flags or {} }),
+      -- ONE of everything, not ninety-nine.  Bag.add refuses when the
+      -- quantity would pass 99 (src/inventory/Bag.lua), so a bag that
+      -- answered 99 for every item made every gift bounce off "you have no
+      -- room" -- the save meant to make gifts possible made them
+      -- impossible, and Copycat's TM31 was unreachable because of it.
+      -- Iterating empty also keeps Bag.slots at zero, so the bag is never
+      -- full however many items are asked for.
+      inventory = setmetatable({}, { __index = function() return 1 end }),
+      pokedex = dex,
+      money = PLENTY_MONEY,
+      coins = PLENTY_COINS,
     }, { __index = function(_, key)
       local v = save[key]
-      if type(v) == "number" then return math.huge end
+      if type(v) == "number" then return PLENTY_MONEY end
       return v
     end })
     -- already safe: a synthetic save, and a stack that swallows pushes, so
@@ -246,9 +378,74 @@ return function(mod)
     local noop = function() end
     return setmetatable({
       __sandboxed = true,
+      -- marks this as the BEST-CASE probe, so the world it is handed is
+      -- generous too -- see probeOw
+      __permissive = true,
       save = fake,
       stack = { push = noop, pop = noop, top = noop, states = {} },
     }, { __index = game })
+  end
+
+  -- The world a probe hands a closure.
+  --
+  -- Ordinarily bare: a runner that records rows and nothing else, because a
+  -- script reaching past it is doing world work the probe has no business
+  -- answering.
+  --
+  -- The best-case probe is different.  It asks "if everything you could have
+  -- done, you had done" -- and not every gate is in the save.  Both Mt Moon
+  -- fossils sit behind superNerdBeaten(ow), which calls ow:npcByIndex and
+  -- ow:trainerDefeated; against a bare stub the first of those throws, and
+  -- the fossil behind it was never seen.  So the generous world answers yes
+  -- to what a script can ask of it -- the same willing path the walker
+  -- already takes for an `ask`.
+  local function probeOw(onRows, generous, real)
+    local ow = { runner = { run = onRows,
+                            isRunning = function() return false end } }
+    -- Read-through, write-nowhere.  For the TODAY probe the truthful answer
+    -- matters: once the Super Nerd is beaten the fossil is takeable now, not
+    -- later.  trainerDefeated keys on the npc's own id, so nothing but the
+    -- real object gives a real answer -- but a shadow over it answers every
+    -- read and swallows every write, so a script that turns an NPC to face
+    -- it cannot turn one in the world.  Only the queries are forwarded;
+    -- anything that would move or fight goes nowhere.
+    if real then
+      local function shade(n)
+        if type(n) ~= "table" then return n end
+        return setmetatable({}, { __index = n })
+      end
+      local function forward(name, wrap)
+        local f = real[name]
+        if type(f) ~= "function" then return end
+        ow[name] = function(_, ...)
+          local ok, v = pcall(f, real, ...)
+          if not ok then return nil end
+          return wrap and shade(v) or v
+        end
+      end
+      forward("trainerDefeated")
+      forward("objectVisible")
+      forward("npcByIndex", true)
+      forward("npcByName", true)
+      -- deliberately no ow.npcs: handing over the live list would let a
+      -- script write straight into the objects the world is drawing, and
+      -- everything that needs one asks by index or by name
+      ow.player = shade(real.player)
+      return ow
+    end
+    if not generous then return ow end
+    local stub = { id = "probe", px = 0, py = 0, cellX = 0, cellY = 0,
+                   facing = "down", def = { index = 1, name = "PROBE" } }
+    ow.npcs = { stub }
+    ow.player = { px = 0, py = 0, cellX = 0, cellY = 0, facing = "down" }
+    ow.trainerDefeated = function() return true end
+    ow.npcByIndex = function() return stub end
+    ow.npcByName = function() return stub end
+    ow.objectVisible = function() return true end
+    ow.facePlayer = function() end
+    ow.faceObject = function() end
+    ow.engageTrainer = function() end
+    return ow
   end
 
   -- A gift is already claimed when a flag the giving path SETS is already
@@ -264,6 +461,19 @@ return function(mod)
         return true
       end
     end
+    return false
+  end
+
+  -- A leader still owing a badge or a TM.  The badge lands with the win and
+  -- the TM is a separate hand-over that retries when the bag was full at the
+  -- time, so each has its own receipt and either one outstanding is a gift.
+  local function victoryReward(def, game)
+    if not (def and def.trainerClass) then return false end
+    local e = Victories[def.trainerClass .. "#" .. tostring(def.trainerParty or 1)]
+    if not e then return false end
+    local flags = (game and game.save and game.save.flags) or {}
+    if e.badge and not flags[e.flag] then return true end
+    if e.item and not flags[e.gotFlag] then return true end
     return false
   end
 
@@ -302,6 +512,14 @@ return function(mod)
   -- ends.
 
   local tiers = {}          -- npc.id -> tier
+  -- Signs are not NPCs.  They live in map.signs and are answered by
+  -- signAtCell, so nothing iterates them and nothing draws them -- which is
+  -- why the six FUCHSIA dex placards, the only signs in the game that hand
+  -- you anything, had no bubble at all.  Kept separate because they are
+  -- keyed by cell rather than by id, and only the ! ones are kept: a smile
+  -- on a sign can never clear, since the game writes down nothing when you
+  -- read one.
+  local signTiers = {}      -- "x,y" -> tier, current map only
   -- A script that sets three flags fires flag.changed three times, and a
   -- rebuild walks every NPC's program.  Mark and settle once instead: the
   -- draw asks for freshness, so at worst it costs one rebuild per frame and
@@ -348,7 +566,7 @@ return function(mod)
   -- can never answer for state it was not built from.
   local sandboxCache, sandboxFor = nil, nil
 
-  local function sandbox(game)
+  function sandbox(game)
     if not game then return nil end
     if sandboxCache and sandboxFor == game then return sandboxCache end
     local noop = function() end
@@ -361,18 +579,249 @@ return function(mod)
     return sandboxCache
   end
 
-  function programFor(prog, game, npc)
+  -- ------- the second probe: closures that give without saying so
+  --
+  -- Most builders hand their rows to ow.runner:run and the walk above reads
+  -- them (Melanie's Bulbasaur).  A few never build rows at all -- they call
+  -- Bag.add themselves, inside the "when the player closes this box"
+  -- callback of a text box (Mr Psychic's TM29, Copycat's TM31, each of
+  -- Oak's aides).  Those handed back nothing, so every one of them fell to
+  -- the smile: a free HM reading exactly like a remark about the weather.
+  --
+  -- So when nothing was captured, run it again with a stack that CLOSES its
+  -- boxes, and watch the bag.  What lands there is the gift, and a
+  -- synthesised give_item row hands it to the same walker everything else
+  -- goes through -- so "already claimed" and "not yet" keep working without
+  -- a second set of rules.
+  --
+  -- Sealed by swapping `require` for the duration rather than stubbing a
+  -- list of modules: the scripts require INSIDE the closure, so one gate
+  -- catches every one of them, and a script that reaches for something new
+  -- cannot leak past it.  Sound, music, battles and the follower all come
+  -- back inert; the save is a copy; nothing here touches the real game.
+  local function inertModule()
+    return setmetatable({}, { __index = function() return function() end end })
+  end
+
+  -- ------- one probe's view of the save
+  --
+  -- Reads fall through to the rebuild's deep copy; writes land here and are
+  -- thrown away with the view.  BOTH probes take their own, which is what
+  -- makes the copy underneath a clean baseline to measure a gift against --
+  -- when the row-building probe wrote straight into the copy, the gift it
+  -- left behind was already in the "before" reading and the watcher saw no
+  -- change at all.
+  --
+  -- Shadowed rather than copied, because the best-case save is built from
+  -- metatables that answer every lookup and iterate to nothing: copying it
+  -- hands back an empty bag and Copycat's TM31 looks unreachable.
+  --
+  -- The copy is the barrier that matters.  Everything this does not name --
+  -- the object toggles a hide_object writes, the hiddenTaken a found item
+  -- writes, the day care, the safari counters -- falls through to the copy,
+  -- so a write at any depth lands there and never in the player's own file.
+  -- The named ones are the ones a wrong answer would mis-tier: the bag and
+  -- the party because a gift is measured against them, the flags and the
+  -- POKeDEX because they are the receipts a script reads to decide whether
+  -- it still owes you anything.
+  local function probeSave(base)
+    base = base or {}
+    local save = setmetatable({}, { __index = base })
+    save.inventory = setmetatable({}, { __index = base.inventory or {} })
+    save.flags = setmetatable({}, { __index = base.flags or {} })
+    -- The POKeDEX is COPIED, not shadowed.  check_dex_owned counts with
+    -- pairs(), and a shadow iterates to nothing however many lookups it
+    -- answers -- so each of OAK's aides, who want 10, 30 and 50 species,
+    -- read a dex of zero and went quiet.  Small enough to copy: it is one
+    -- boolean per species.
+    local dex = base.pokedex or {}
+    local seen, owned = {}, {}
+    for k, v in pairs(dex.seen or {}) do seen[k] = v end
+    for k, v in pairs(dex.owned or {}) do owned[k] = v end
+    save.pokedex = { seen = seen, owned = owned }
+    -- a shop is a shop whether or not you can afford it today
+    save.money = PLENTY_MONEY
+    save.coins = PLENTY_COINS
+
+    -- The party is copied member by member, each behind its own shadow.
+    -- Reading has to keep working -- the day care reads a level, a seller
+    -- checks for room -- but a write must not reach the real POKeMON.
+    -- give_pokemon calls Party.add(save.party, mon), which inserts straight
+    -- into whatever list it is handed, and reading save.party through the
+    -- shadow handed it the player's own: probing the MAGIKARP salesman put
+    -- a MAGIKARP in the party, and probing the day care raised a real
+    -- member to the level it was offering.
+    local baseParty = base.party or {}
+    local party = {}
+    for i, mon in ipairs(baseParty) do
+      party[i] = type(mon) == "table" and setmetatable({}, { __index = mon })
+                 or mon
+    end
+    save.party = party
+    -- and the boxes, where a gift lands when the party is full
+    local baseBoxes = type(base.boxes) == "table" and base.boxes or nil
+    local beforeStored = 0
+    if baseBoxes then
+      local boxes = {}
+      for k, b in pairs(baseBoxes) do
+        if type(b) == "table" then
+          local copy = {}
+          for i, mon in ipairs(b) do copy[i] = mon end
+          beforeStored = beforeStored + #b
+          boxes[k] = copy
+        else
+          boxes[k] = b
+        end
+      end
+      save.boxes = boxes
+    end
+    return save, #baseParty, beforeStored
+  end
+
+  local function observedGift(entry, game, npc, realOw)
+    if type(entry) ~= "function" then return nil end
+    local safeGame = (type(game) == "table" and game.__sandboxed) and game
+                     or sandbox(game)
+    local base = (safeGame and safeGame.save) or {}
+    local save, baseParty, beforeStored = probeSave(base)
+    local party = save.party
+    -- what the bag held before it ran, read off the copy rather than the
+    -- view, so a metatable's answer counts as the starting quantity
+    local before = setmetatable({}, { __index = function(_, k)
+      return (base.inventory or {})[k] or 0
+    end })
+
+    local depth = 0
+    local probe = setmetatable({
+      __sandboxed = true,
+      save = save,
+      stack = {
+        push = function(_, box)
+          depth = depth + 1
+          -- a chain that will not end must not take the frame with it
+          if depth > 48 then return end
+          if type(box) ~= "table" then return end
+          -- answer first, then close: a prompt's continuation IS the rest of
+          -- the conversation, and the gift usually lives inside it
+          if type(box.choice) == "function" then box.choice(true) end
+          if type(box.onDone) == "function" then box.onDone() end
+        end,
+        pop = function() end, top = function() end, states = {},
+      },
+    }, { __index = game })
+
+    -- A box that also carries the answer to a question.  A yes/no prompt is
+    -- a TextBox with a `choice` callback (see the `ask` helper the scripts
+    -- share), and a probe that only closes boxes never answers it -- which
+    -- is why each of Oak's aides, who open by asking whether you have caught
+    -- enough, gave up nothing.  It answers YES, the same willing path the
+    -- walker already takes for an `ask` row, so the two agree.
+    local FakeTextBox = { new = function(_, text, done, opts)
+      local choice = type(opts) == "table" and opts.choice or nil
+      return { __probe = true, text = text, onDone = done, choice = choice }
+    end }
+    -- A menu is a question with more than two answers.  The probe already
+    -- says yes to a yes/no; a list it cannot answer just sits there
+    -- unpicked, which is why the vending machines and the Game Corner prize
+    -- counters -- shops, all six -- looked like they did nothing at all.
+    -- It takes the first row that carries a value, since the trailing
+    -- "NO THANKS" exit carries none, and one purchase is enough to prove
+    -- there is something to be had here.
+    local FakeListMenu = { new = function(_, _, items, opts)
+      return { __probe = true, onDone = function()
+        local onChoose = type(opts) == "table" and opts.onChoose
+        if type(onChoose) ~= "function" then return end
+        for _, item in ipairs(type(items) == "table" and items or {}) do
+          if type(item) == "table" and item.value ~= nil then
+            onChoose(item)
+            return
+          end
+        end
+      end }
+    end }
+    -- the same willing answer the TextBox choice already gives
+    local FakeChoiceBox = { new = function(_, onChoose)
+      return { __probe = true, onDone = function()
+        if type(onChoose) == "function" then onChoose(true) end
+      end }
+    end }
+    local SEALED = {
+      ["src.render.TextBox"] = FakeTextBox,
+      ["src.ui.ListMenu"] = FakeListMenu,
+      ["src.ui.ChoiceBox"] = FakeChoiceBox,
+      ["src.core.Sound"] = inertModule(),
+      ["src.core.Music"] = inertModule(),
+      ["src.battle.BattleState"] = inertModule(),
+      ["src.world.PikachuFollower"] = inertModule(),
+    }
+    local realRequire = require
+    _G.require = function(name) return SEALED[name] or realRequire(name) end
+    -- The result is deliberately ignored.  A gift is observed the moment
+    -- Bag.add writes it, and what the closure does AFTERWARDS is usually
+    -- world work the stub cannot answer -- the museum scientist hands over
+    -- the OLD AMBER and then hides the exhibit, which needs a real map, so
+    -- it throws.  Discarding the run on that error threw away a gift that
+    -- had already happened, and the giver came out a smile.  An error
+    -- cannot un-give what the bag is already holding.
+    pcall(entry, probe,
+          probeOw(function() end, game and game.__permissive, realOw),
+          npc or {}, function() end)
+    _G.require = realRequire
+
+    -- only what the shadow itself holds: pairs() on it lists exactly the
+    -- items the closure wrote, whatever the save underneath answers
+    local rows = nil
+    for item, count in pairs(save.inventory) do
+      if type(count) == "number" and count > (before[item] or 0) then
+        rows = rows or {}
+        rows[#rows + 1] = { "give_item", item, 1 }
+      end
+    end
+
+    -- A POKeMON is a gift too, and it never touches the bag.  The MAGIKARP
+    -- salesman and the GAME CORNER's two mon counters hand one over, and
+    -- watching only the inventory made all three look like they did nothing.
+    local storedNow = 0
+    for _, b in pairs(save.boxes or {}) do
+      if type(b) == "table" then storedNow = storedNow + #b end
+    end
+    local gained = (#party - baseParty) + (storedNow - beforeStored)
+    if gained > 0 then
+      local last = party[#party]
+      rows = rows or {}
+      rows[#rows + 1] = { "give_pokemon",
+                          (type(last) == "table" and last.species) or "?" }
+    end
+    return rows
+  end
+
+  function programFor(prog, game, npc, realOw)
     if type(prog) == "table" then return prog end
     if type(prog) ~= "function" then return nil end
     local captured
-    local stub = { runner = { run = function(_, rows) captured = rows end } }
     -- a caller may hand in an already-safe game (the best-case probe);
     -- copying it again would flatten the metatables it is built from
-    local safe = (type(game) == "table" and game.__sandboxed) and game
-                 or sandbox(game)
-    local ok = pcall(prog, safe, stub, npc, function() end)
-    if ok and type(captured) == "table" then return captured end
-    return nil
+    local outer = (type(game) == "table" and game.__sandboxed) and game
+                  or sandbox(game)
+    -- its own view, so what it writes cannot be mistaken for what was
+    -- already there when the watcher below takes its reading
+    local safe = setmetatable({ __sandboxed = true,
+                                __permissive = outer and outer.__permissive,
+                                save = probeSave(outer and outer.save),
+                                stack = { push = function() end,
+                                          pop = function() end,
+                                          top = function() end, states = {} } },
+                              { __index = outer })
+    -- the best-case probe wants a generous world, not the real one
+    local stub = probeOw(function(_, rows) captured = rows end,
+                         safe.__permissive,
+                         not safe.__permissive and realOw or nil)
+    -- Same reasoning as observedGift: rows are complete when they reach
+    -- runner:run, and a throw further down does not unbuild them.
+    pcall(prog, safe, stub, npc, function() end)
+    if type(captured) == "table" then return captured end
+    -- built no rows: it may still be giving something directly
+    return observedGift(prog, game, npc, not safe.__permissive and realOw or nil)
   end
 
   local function rebuild()
@@ -388,18 +837,74 @@ return function(mod)
     if not talk then return end
     for _, npc in ipairs(ow.npcs or {}) do
       local key = npc.def and npc.def.text
-      local prog = programFor(key and talk[key], game, npc)
+      -- A trainer already tells you what they are: they see you, they show
+      -- their own "!", and they fight.  Nothing this mod can add to that is
+      -- news.  They were reaching the unreadable-closure fallback and coming
+      -- out as smiles -- every gym leader and all four of the Elite Four.
+      --
+      -- Read off the map object rather than a list of names: the extractor
+      -- writes trainerClass on anything that battles you, so a trainer added
+      -- by another mod is covered without this mod knowing it exists.
+      --
+      -- A gift still wins, though.  The NUGGET on Route 24 is handed over by
+      -- someone who then fights you, and hiding that would cost the player
+      -- the thing the bubble exists for.  So a trainer loses the smile and
+      -- the "?", never the "!".
+      -- trainerClass, and nothing cleverer.  It is the engine's OWN
+      -- announcement: an NPC carrying one gets sight-lines and shows its
+      -- own "!" when it spots you, so a second marker is noise.  A scripted
+      -- battle announces nothing at all -- Oak's post-game rematch and the
+      -- Fan Club chief have no trainer header, and the only window in which
+      -- either is worth crossing the map for is the one a broader rule
+      -- silenced.  Do not duplicate what the engine says; do not stay quiet
+      -- about what it does not.
+      local isTrainer = npc.def and npc.def.trainerClass ~= nil
+      local prog = programFor(key and talk[key], game, npc, ow)
       local entry = key and talk[key]
-      if prog then
-        tiers[npc.id] = classify(prog, game, entry)
-      elseif type(entry) == "function" then
-        -- A closure we cannot read is still a signal.  Ordinary NPCs have
-        -- no script at all; a hand-written one exists precisely because the
-        -- interaction did not fit the command rows -- the bike shop clerk,
-        -- Misty, the badge house.  So it is not "unknown, show nothing",
-        -- it is "something bespoke happens here", which is the smile.
-        opaque[map.id .. "/" .. tostring(key)] = true
-        tiers[npc.id] = 3
+      -- A leader is not announced by the engine the way a route trainer is:
+      -- sight engagement skips anyone carrying a talk script
+      -- (OverworldController, CheckFightingMapTrainers), and every leader
+      -- has one.  So nothing tells the player a badge and a TM are sitting
+      -- there -- and their scripts cannot say so either, since the rewards
+      -- are paid from the victories table rather than from any row.
+      if victoryReward(npc.def, game) then
+        tiers[npc.id] = 1
+      elseif prog then
+        local tier = classify(prog, game, entry)
+        -- a trainer keeps a gift, loses everything softer
+        if isTrainer and tier ~= 1 and tier ~= 4 then tier = nil end
+        tiers[npc.id] = tier
+      elseif type(entry) == "function" and not isTrainer then
+        -- Nothing to give TODAY -- but a closure gated on something you have
+        -- not done yet gives nothing either, and those are exactly the ones
+        -- worth marking.  Copycat wants the POKe DOLL; each of Oak's aides
+        -- wants 10, 30 and 50 species.  Ask once more with the prerequisites
+        -- met and nothing claimed, and a real "come back later" falls out.
+        local best = programFor(entry, permissive(game), npc)
+        if best and hasGive(best) and not alreadyClaimed(best, game) then
+          tiers[npc.id] = 4
+        else
+          -- A closure we cannot read is still a signal.  Ordinary NPCs have
+          -- no script at all; a hand-written one exists precisely because
+          -- the interaction did not fit the command rows -- the bike shop
+          -- clerk, Misty, the badge house.  So it is not "unknown, show
+          -- nothing", it is "something bespoke happens here": the smile.
+          opaque[map.id .. "/" .. tostring(key)] = true
+          tiers[npc.id] = 3
+        end
+      end
+    end
+
+    signTiers = {}
+    for _, sign in ipairs((map.def and map.def.signs) or {}) do
+      local entry = sign.text and talk[sign.text]
+      if entry ~= nil then
+        local prog = programFor(entry, game, nil, ow)
+        local tier = prog and classify(prog, game, entry) or nil
+        -- only a gift: see above
+        if tier == 1 then
+          signTiers[sign.x .. "," .. sign.y] = tier
+        end
       end
     end
   end
@@ -410,6 +915,34 @@ return function(mod)
 
   local function markDirty() dirty = true end
 
+  -- A script that writes save.flags itself never fires flag.changed: that
+  -- event comes from Flags.set, and the shared gift() helper assigns
+  -- `game.save.flags[opts.flag] = true` straight out.  So the ROUTE 1
+  -- POTION man kept his ! after handing it over -- nothing told the mod
+  -- anything had happened, and the bubble only cleared when the map change
+  -- forced a rebuild.
+  --
+  -- Notice the A press instead.  It cannot be acted on at the time: when
+  -- the press lands the conversation has not run yet, and the flag is
+  -- written when the last box closes.  So it is remembered, and settled
+  -- once the world has the player back -- no box on the stack, no script
+  -- running, input unlocked.
+  local pendingTalk = false
+  local function settle()
+    if not pendingTalk then return end
+    local game = mod.world and mod.world.game
+    local ow = mod.world and mod.world:overworld()
+    if not (game and ow and game.stack) then return end
+    if game.stack.top and game.stack:top() ~= ow then return end
+    local player = ow.player
+    if player and player.inputLocked then return end
+    local runner = ow.runner
+    if runner and runner.isRunning and runner:isRunning() then return end
+    pendingTalk = false
+    markDirty()
+  end
+
+  mod.events:on("world.interacted", function() pendingTalk = true end)
   mod.events:on("map.entered", rebuild)
   mod.events:on("map.reloaded", rebuild)
   mod.events:on("flag.changed", markDirty)
@@ -489,6 +1022,7 @@ return function(mod)
   -- of the NPC.  Riding the sprite's own draw call inherits the transform
   -- for free, so the offsets below are correct in both modes.
   local function drawFor(npc, camX, camY)
+    settle()
     if dirty then rebuild() end
     local tier = tiers[npc.id]
     if not (tier and enabled(tier)) then return end
@@ -504,6 +1038,32 @@ return function(mod)
     g.setColor(r, gg, b, a)
   end
 
+  -- The same offsets NPC.draw uses, from the cell rather than from a moving
+  -- sprite: a sign never walks, so its pixel position is just its cell.
+  local function drawSigns(camX, camY)
+    settle()
+    if dirty then rebuild() end
+    if not next(signTiers) then return end
+    local image = art(mod.world and mod.world.game)
+    if not (image and quads) then return end
+    local g = love.graphics
+    local r, gg, b, a = g.getColor()
+    for cell, tier in pairs(signTiers) do
+      if enabled(tier) and quads[BUBBLE[tier]] then
+        local sx, sy = cell:match("^(-?%d+),(-?%d+)$")
+        if sx then
+          g.setColor(1, 1, 1, alphaFor(tier))
+          g.draw(image, quads[BUBBLE[tier]],
+                 math.floor(tonumber(sx) * 16 - camX) + 4,
+                 math.floor(tonumber(sy) * 16 - camY) - 14)
+        end
+      end
+    end
+    g.setColor(r, gg, b, a)
+  end
+
+  mod.exports.drawSigns = drawSigns
+  mod.exports.signTiers = function() return signTiers end
   mod.exports.reachableTier = reachableTier
   mod.exports.programFor = programFor
   mod.exports.tiers = function() return tiers end
@@ -524,6 +1084,25 @@ return function(mod)
       baseDraw(self, camX, camY, ...)
       local ok, err = pcall(drawFor, self, camX or 0, camY or 0)
       if not ok then mod.log:error("bubble draw failed: %s", tostring(err)) end
+    end
+
+    -- Signs get no draw call of their own, so there is nothing per-sign to
+    -- wrap.  drawWorld is the flat-mode pass that draws the entities, and it
+    -- works in the same manual camera offset the sprites do -- no transform
+    -- is pushed -- so the placards land in the same space right after it.
+    local OverworldController = require("src.world.OverworldController")
+    local State = OverworldController.OverworldState or OverworldController
+    if type(State) == "table" and type(State.drawWorld) == "function" then
+      local baseWorld = State.drawWorld
+      State.drawWorld = function(self, ...)
+        local result = baseWorld(self, ...)
+        local cam = self.camera
+        if cam then
+          local ok, err = pcall(drawSigns, cam.x or 0, cam.y or 0)
+          if not ok then mod.log:error("sign draw failed: %s", tostring(err)) end
+        end
+        return result
+      end
     end
   end
 
@@ -918,6 +1497,7 @@ return function(mod)
       if not (v and canvas and ctx and tonumber(ctx.vw) and ctx.vw > 0) then
         return canvas
       end
+      settle()
       ensureFresh()
       if not next(tiers) then return canvas end
       local ow = mod.world and mod.world:overworld()

@@ -34,11 +34,15 @@ things as you progress.
 
 ![Two NPCs in the bike shop, each with a smile bubble](docs/screenshot-bikeshop.png)
 
-Bubbles update the instant something changes, so one disappears as you finish
+Bubbles update the instant something changes, so one steps down as you finish
 the conversation rather than on the next screen.
 
-Poké Balls on the ground, legendary encounters and trainers are left alone —
-they already look like what they are.
+Signs get them too, where a sign has something for you: each of the Fuchsia
+zoo placards shows a **`!`** until that Pokémon is in your Pokédex.
+
+Poké Balls on the ground are left alone — they already look like what they
+are. So are ordinary trainers, who announce themselves. A gym leader keeps a
+**`!`** until you have both their badge and the TM they hand over afterwards.
 
 ## Options
 
@@ -46,14 +50,18 @@ Set these in the in-game mod manager.
 
 | Option | Shows | Default |
 | --- | --- | --- |
-| `GIFT BUBBLE` | `!` — you get something now | on |
-| `EVENT BUBBLE` | `?` — the world changes | on |
-| `STORY BUBBLE` | smile — they say new things as you progress | on |
-| `LATER BUBBLE` | faded `!` — something here later | on |
-| `LATER FADE %` | how solid the faded `!` looks | 75 |
+| `! BUBBLE` | `!` — you get something now | on |
+| `FADED ! BUBBLE` | faded `!` — something here later | on |
+| `? BUBBLE` | `?` — the world changes | on |
+| `SMILE BUBBLE` | smile — they say new things as you progress | on |
+| `HIDDEN BY WALLS` | hides a bubble whose NPC is behind a roof, in first and third person | off |
+| `LATER FADE` | how solid the faded `!` looks | 50 |
 
-If the smiles feel like too much, turn `STORY BUBBLE` off first — it is the
+If the smiles feel like too much, turn `SMILE BUBBLE` off first — it is the
 broadest one.
+
+There is also a guide in **START → OPTIONS → NPC BUBBLES** that draws the four
+bubbles at the size they appear over an NPC, so you can see which is which.
 
 ## Notes
 
