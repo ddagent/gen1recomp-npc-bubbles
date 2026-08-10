@@ -3,6 +3,63 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.0
+
+### Added
+
+- **NPC BUBBLES has its own page in START > OPTIONS**, near the top of the
+  list rather than buried at the bottom of it. The page holds the guide and
+  every setting, so the bubbles can be turned on and off without leaving the
+  game menu for the mod manager. The same
+  settings are still on the mod manager's page, and both write the same
+  stored value, so changing one changes the other.
+
+- **The guide now says how much is left.** It opens with a count of the
+  people and signs still carrying something for you, out of everyone who
+  ever did, plus the same count for wherever you are standing. A town is
+  counted with the buildings in it, so PEWTER CITY includes its gym, its
+  mart and the museum.
+
+  Each place breaks down by building: standing in VIRIDIAN CITY lists the
+  city, the gym and the mart on their own lines with their own counts, and
+  standing inside any of them shows the same list rather than just the room
+  you are in. Below that, every place you have been to, one line each with
+  what is left in it, in the game's own map order -- so it is one look to
+  see where there is most still to do.
+
+  Only places you have actually been, so it never names somewhere before
+  you have found it. The game itself only records the ten towns, but
+  anything you have beaten or picked up is written down against the map it
+  was on, which is how the routes and the caves get there too. ROUTE 1 has
+  nobody to fight and nothing to pick up, so nothing is ever written down
+  against it -- but it is the only way from PALLET to VIRIDIAN, and a road
+  running between two places you have been is a road you have walked.
+
+  What counts is decided by asking the same question twice: once against
+  your save, and once against one with the progress stripped out. Somebody
+  only joins the total if a game without your progress would have marked
+  them, which keeps the several hundred people with nothing to offer out of
+  the denominator. Smiles count for neither side -- a smile means "worth
+  another word later" rather than a job, and counting them would let
+  `CLEAR AFTER TALK` move the score without anything in the world changing.
+
+  Somebody who is not on the map counts as finished once whatever they were
+  holding has been handed over, and is left out until then -- so the VIRIDIAN
+  old man still counts after he has packed up and gone, and BILL does not
+  count before he is home. The total can still grow late on, when something
+  like the ROUTE 23 guards becomes a task only once you hold the badges -- it
+  never shrinks, so finishing something can never send the score backwards.
+
+### Changed
+
+- The rule deciding what each bubble is worth now lives in one place
+  instead of being written out again for the count. Nothing about the
+  bubbles themselves changed: all 218 scripted NPCs classify exactly as
+  they did in 2.2.2.
+- Whether somebody is on a map is asked of the game itself rather than
+  worked out separately, so a mod that adds a new reason for someone to be
+  absent is understood without this mod knowing it exists.
+
 ## 2.2.2
 
 ### Fixed

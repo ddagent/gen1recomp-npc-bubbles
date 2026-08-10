@@ -1,3 +1,9 @@
+# Exact relative paths, one per line -- no globs, no directories. Anything
+# that would need a whole directory kept out lives in a dot-directory
+# instead (.devtools), which pack skips outright the way it skips .git: a
+# hand-written list of scratch files goes stale silently, and the file
+# somebody forgets to add is the one that ships.
+#
 # Exact relative paths, one per line: tests are for the checkout, not the
 # shipped package. Screenshots are for the README and the index listing --
 # players download them once from GitHub, not with every mod update.

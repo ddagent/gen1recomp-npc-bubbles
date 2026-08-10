@@ -48,7 +48,9 @@ are. So are ordinary trainers, who announce themselves. A gym leader keeps a
 
 ## Options
 
-Set these in the in-game mod manager.
+**START → OPTIONS → NPC BUBBLES..**, near the top of the list. It holds the
+guide and every setting below. They are also on the mod manager's page —
+either place works, and both change the same setting.
 
 | Option | Shows | Default |
 | --- | --- | --- |
@@ -66,8 +68,33 @@ them all, each one goes as you hear it, and comes back if that person starts
 saying something new. Only smiles are affected — a `!` never hides because
 you spoke to someone.
 
-There is also a guide in **START → OPTIONS → NPC BUBBLES** that draws the four
-bubbles at the size they appear over an NPC, so you can see which is which.
+The guide inside that page draws the four bubbles at the size they appear
+over an NPC, so you can see which is which.
+
+## How much is left
+
+The guide opens with a count: how many people and signs still have something
+for you, out of everyone who ever did, and the same count for wherever you
+are standing. A town is counted together with its buildings, so PEWTER CITY
+covers the gym, the mart and the museum.
+
+Each place breaks down by building, so a town lists its gym, its mart and
+its museum on separate lines with their own counts. Standing inside one of
+them shows the same list — the town you are in, not the room.
+
+Under that is everywhere you have been, one line each, so you can see at a
+glance where there is most still to do. It only lists places you have
+actually been, so it never names somewhere you have not found yet — towns,
+routes and caves alike.
+
+Only jobs count. The hundreds of people with nothing to offer are left out,
+and so are smiles — a smile means someone is worth another word later, not
+that you have something to do. Somebody who has finished with you and left
+town still counts, and counts as done — the old man outside Viridian does
+not vanish from the tally when he packs up. Somebody who has not shown up
+yet is not counted until they do, so the total grows a little as the game
+opens up. It never goes down, so finishing something can only ever move the
+score forwards.
 
 ## Notes
 

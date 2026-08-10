@@ -162,6 +162,11 @@ return function(mod)
   -- and both of those ask what an NPC would say, which needs the walker and
   -- the probe, so it is defined with them further down
   local saidNow
+  -- Wired to save.loaded long before it is defined, and a handler named
+  -- above its definition is a nil global rather than an error -- it
+  -- registers nothing and the cache never clears.  Declared here, and
+  -- called through a closure at the wiring site.
+  local forgetScore
 
   -- ------- reading the live state the branches ask about
 
@@ -938,6 +943,98 @@ return function(mod)
     return observedGift(prog, game, npc, not safe.__permissive and realOw or nil)
   end
 
+  -- One place decides what tier somebody is.
+  --
+  -- Two callers ask that question.  rebuild asks it of the NPCs standing in
+  -- front of you; the completion count asks it of every NPC on every map,
+  -- and of a fresh save as well as yours.  Written out twice the two copies
+  -- would agree today and drift apart the first time either rule changed --
+  -- and the count would quietly stop matching the bubbles it is counting.
+  --
+  -- `live` marks the rebuild call.  Only that one may consult CLEAR AFTER
+  -- TALK, and only that one records a script it could not read.  The count
+  -- wants the tier the rules give, not the tier you happen to be shown:
+  -- otherwise turning a display toggle on would move the percentage.
+  local function tierFor(npc, entry, game, ow, mapId, live)
+    -- A trainer already tells you what they are: they see you, they show
+    -- their own "!", and they fight.  Nothing this mod can add to that is
+    -- news.  They were reaching the unreadable-closure fallback and coming
+    -- out as smiles -- every gym leader and all four of the Elite Four.
+    --
+    -- Read off the map object rather than a list of names: the extractor
+    -- writes trainerClass on anything that battles you, so a trainer added
+    -- by another mod is covered without this mod knowing it exists.  It is
+    -- the engine's OWN announcement: an NPC carrying one gets sight-lines
+    -- and shows its own "!" when it spots you, so a second marker is noise.
+    -- A scripted battle announces nothing at all -- Oak's post-game rematch
+    -- and the Fan Club chief have no trainer header, and the only window in
+    -- which either is worth crossing the map for is the one a broader rule
+    -- silenced.  Do not duplicate what the engine says; do not stay quiet
+    -- about what it does not.
+    --
+    -- A gift still wins.  The NUGGET on Route 24 is handed over by someone
+    -- who then fights you, and hiding that would cost the player the thing
+    -- the bubble exists for.  So a trainer loses the smile and the "?",
+    -- never the "!".
+    local isTrainer = npc.def and npc.def.trainerClass ~= nil
+    -- A leader is not announced by the engine the way a route trainer is:
+    -- sight engagement skips anyone carrying a talk script
+    -- (OverworldController, CheckFightingMapTrainers), and every leader has
+    -- one.  So nothing tells the player a badge and a TM are sitting there
+    -- -- and their scripts cannot say so either, since the rewards are paid
+    -- from the victories table rather than from any row.
+    if victoryReward(npc.def, game) then return 1 end
+    local prog = programFor(entry, game, npc, ow)
+    if prog then
+      local tier = classify(prog, game, entry)
+      -- a trainer keeps a gift, loses everything softer
+      if isTrainer and tier ~= 1 and tier ~= 4 then return nil end
+      -- and a smile you have already heard is not news until it changes
+      if tier == 3 and live and mod.options:get("heard") == true
+         and alreadyHeard(mapId, npc, entry, game, ow) then
+        return nil
+      end
+      return tier, prog
+    elseif type(entry) == "function" and not isTrainer then
+      -- Nothing to give TODAY -- but a closure gated on something you have
+      -- not done yet gives nothing either, and those are exactly the ones
+      -- worth marking.  Copycat wants the POKe DOLL; each of Oak's aides
+      -- wants 10, 30 and 50 species.  Ask once more with the prerequisites
+      -- met and nothing claimed, and a real "come back later" falls out.
+      local best = programFor(entry, permissive(game), npc)
+      if best and hasGive(best) and alreadyClaimed(best, game) then
+        -- spent: it handed its gift over and set its own receipt, and the
+        -- receipt is already true.  Nothing left to say.
+        return nil, best
+      elseif best and hasGive(best) then
+        return 4, best
+      else
+        -- A closure we cannot read is still a signal.  Ordinary NPCs have
+        -- no script at all; a hand-written one exists precisely because the
+        -- interaction did not fit the command rows -- the bike shop clerk,
+        -- Misty, the badge house.  So it is not "unknown, show nothing", it
+        -- is "something bespoke happens here": the smile.
+        if live then
+          opaque[mapId .. "/" .. tostring(npc.def and npc.def.text)] = true
+          if mod.options:get("heard") == true
+             and alreadyHeard(mapId, npc, entry, game, ow) then
+            return nil
+          end
+        end
+        return 3, best
+      end
+    end
+    return nil
+  end
+
+  -- The same for a sign, which has no NPC and no closures worth probing:
+  -- only a gift counts.  See the sign note in rebuild.
+  local function signTierFor(entry, game, ow)
+    local prog = programFor(entry, game, nil, ow)
+    local tier = prog and classify(prog, game, entry) or nil
+    return tier == 1 and 1 or nil
+  end
+
   local function rebuild()
     sandboxCache, sandboxFor = nil, nil   -- the save moved; the copy is stale
     dirty = false
@@ -951,88 +1048,15 @@ return function(mod)
     if not talk then return end
     for _, npc in ipairs(ow.npcs or {}) do
       local key = npc.def and npc.def.text
-      -- A trainer already tells you what they are: they see you, they show
-      -- their own "!", and they fight.  Nothing this mod can add to that is
-      -- news.  They were reaching the unreadable-closure fallback and coming
-      -- out as smiles -- every gym leader and all four of the Elite Four.
-      --
-      -- Read off the map object rather than a list of names: the extractor
-      -- writes trainerClass on anything that battles you, so a trainer added
-      -- by another mod is covered without this mod knowing it exists.
-      --
-      -- A gift still wins, though.  The NUGGET on Route 24 is handed over by
-      -- someone who then fights you, and hiding that would cost the player
-      -- the thing the bubble exists for.  So a trainer loses the smile and
-      -- the "?", never the "!".
-      -- trainerClass, and nothing cleverer.  It is the engine's OWN
-      -- announcement: an NPC carrying one gets sight-lines and shows its
-      -- own "!" when it spots you, so a second marker is noise.  A scripted
-      -- battle announces nothing at all -- Oak's post-game rematch and the
-      -- Fan Club chief have no trainer header, and the only window in which
-      -- either is worth crossing the map for is the one a broader rule
-      -- silenced.  Do not duplicate what the engine says; do not stay quiet
-      -- about what it does not.
-      local isTrainer = npc.def and npc.def.trainerClass ~= nil
-      local prog = programFor(key and talk[key], game, npc, ow)
-      local entry = key and talk[key]
-      -- A leader is not announced by the engine the way a route trainer is:
-      -- sight engagement skips anyone carrying a talk script
-      -- (OverworldController, CheckFightingMapTrainers), and every leader
-      -- has one.  So nothing tells the player a badge and a TM are sitting
-      -- there -- and their scripts cannot say so either, since the rewards
-      -- are paid from the victories table rather than from any row.
-      if victoryReward(npc.def, game) then
-        tiers[npc.id] = 1
-      elseif prog then
-        local tier = classify(prog, game, entry)
-        -- a trainer keeps a gift, loses everything softer
-        if isTrainer and tier ~= 1 and tier ~= 4 then tier = nil end
-        -- and a smile you have already heard is not news until it changes
-        if tier == 3 and mod.options:get("heard") == true
-           and alreadyHeard(map.id, npc, entry, game, ow) then
-          tier = nil
-        end
-        tiers[npc.id] = tier
-      elseif type(entry) == "function" and not isTrainer then
-        -- Nothing to give TODAY -- but a closure gated on something you have
-        -- not done yet gives nothing either, and those are exactly the ones
-        -- worth marking.  Copycat wants the POKe DOLL; each of Oak's aides
-        -- wants 10, 30 and 50 species.  Ask once more with the prerequisites
-        -- met and nothing claimed, and a real "come back later" falls out.
-        local best = programFor(entry, permissive(game), npc)
-        if best and hasGive(best) and alreadyClaimed(best, game) then
-          -- spent: it handed its gift over and set its own receipt, and the
-          -- receipt is already true.  Nothing left to say.
-          tiers[npc.id] = nil
-        elseif best and hasGive(best) then
-          tiers[npc.id] = 4
-        else
-          -- A closure we cannot read is still a signal.  Ordinary NPCs have
-          -- no script at all; a hand-written one exists precisely because
-          -- the interaction did not fit the command rows -- the bike shop
-          -- clerk, Misty, the badge house.  So it is not "unknown, show
-          -- nothing", it is "something bespoke happens here": the smile.
-          opaque[map.id .. "/" .. tostring(key)] = true
-          if mod.options:get("heard") == true
-             and alreadyHeard(map.id, npc, entry, game, ow) then
-            tiers[npc.id] = nil
-          else
-            tiers[npc.id] = 3
-          end
-        end
-      end
+      tiers[npc.id] = tierFor(npc, key and talk[key], game, ow, map.id, true)
     end
 
     signTiers = {}
     for _, sign in ipairs((map.def and map.def.signs) or {}) do
       local entry = sign.text and talk[sign.text]
       if entry ~= nil then
-        local prog = programFor(entry, game, nil, ow)
-        local tier = prog and classify(prog, game, entry) or nil
-        -- only a gift: see above
-        if tier == 1 then
-          signTiers[sign.x .. "," .. sign.y] = tier
-        end
+        local tier = signTierFor(entry, game, ow)
+        if tier then signTiers[sign.x .. "," .. sign.y] = tier end
       end
     end
   end
@@ -1177,6 +1201,9 @@ return function(mod)
   mod.events:on("map.entered", rebuild)
   mod.events:on("map.reloaded", rebuild)
   mod.events:on("flag.changed", markDirty)
+  -- the score is worked out from the flags too, so it goes stale with them
+  mod.events:on("save.loaded", function() forgetScore() end)
+  mod.events:on("save.created", function() forgetScore() end)
   mod.events:on("save.loaded", rebuild)
 
   mod.events:on("game.ready", function()
@@ -1542,6 +1569,529 @@ return function(mod)
   local PIPELINE_ID = "npc_bubbles_overlay"
   local ROW_ID = "pipeline:" .. PIPELINE_ID
 
+  -- ------- how much is left
+  --
+  -- The guide can say what a bubble means.  It cannot say how many are
+  -- still out there, which is the thing people actually want to know.
+  --
+  -- Every NPC on every map gets classified twice: once against your save,
+  -- once against a brand-new one.  The fresh pass is what makes the number
+  -- honest.  Most people in this game never carry a bubble at all, and
+  -- counting them would bury the score under flavour text -- so somebody
+  -- only joins the total if a new game would have marked them, and leaves
+  -- the outstanding side once your save no longer does.
+  --
+  -- Smiles count for neither.  A smile is not a task -- it means "worth
+  -- another word later" -- and CLEAR AFTER TALK would otherwise move the
+  -- score without anything in the world having changed.
+  local okMapModule, MapModule = pcall(require, "src.world.Map")
+  local okOw, OwModule = pcall(require, "src.world.OverworldController")
+  -- Looked up when it is called, not captured now.  Holding onto the
+  -- function would freeze whichever one happened to be there at load, and
+  -- another mod replacing the spawn filter -- which is the whole reason the
+  -- engine exposes it -- would go unnoticed.
+  local function engineVisible(save, mapId, obj)
+    local f = okOw and type(OwModule) == "table" and OwModule.objectVisible
+    if type(f) ~= "function" then return nil end
+    local ok, v = pcall(f, save, mapId, obj)
+    if ok then return v end
+    return nil
+  end
+
+  -- Outdoors, plus the PLATEAU tileset.
+  --
+  -- The engine's isOutdoor is about door sounds and tile behaviour, and
+  -- ROUTE 23 and INDIGO PLATEAU are not OVERWORLD by that measure -- so the
+  -- whole end of the game had no daylight to anchor to. VICTORY ROAD named
+  -- itself after whichever of its three floors came up first, and the ELITE
+  -- FOUR after whichever room did, which was a different one each run.
+  --
+  -- The town map already makes exactly this exception for exactly these two
+  -- maps, so that INDIGO PLATEAU appears in the fly list (src/ui/TownMap).
+  -- Somewhere you stand out of doors is somewhere a place can be named
+  -- after, whatever its tileset says about footsteps.
+  local function isOutdoor(def)
+    if not def then return false end
+    if def.tileset == "PLATEAU" then return true end
+    if okMapModule and MapModule and MapModule.isOutdoor then
+      local ok, v = pcall(MapModule.isOutdoor, def)
+      if ok then return v end
+    end
+    return def.outdoor == true or def.tileset == "OVERWORLD"
+  end
+
+  -- A stand-in for the overworld of a map you are not standing on.
+  --
+  -- Scripts ask the world things -- has this trainer been beaten, is this
+  -- object still here, where is the player standing -- and on a remote map
+  -- there is nobody to ask, so this answers from the save.  It answers the
+  -- position questions too, with a plausible player rather than a nil one:
+  -- a stub thin enough to throw is worse than no stub at all, because the
+  -- script dies mid-probe, the NPC reads as unreadable, and the count
+  -- silently drops everybody whose script happens to glance at the player.
+  local function remoteWorld(mapId, game)
+    local save = (game and game.save) or {}
+    local function objId(obj)
+      return mapId .. "_obj_" .. tostring(obj and obj.index)
+    end
+    -- Somebody for a script to reach for.  Handing back nil is what a thin
+    -- stub does, and it costs sixteen real tasks: the fossil pair ask the
+    -- world for the SUPER NERD by index, Oak's aides for each other, and
+    -- indexing the nil that came back kills the probe before the gift is
+    -- ever written down.  A throwaway answers the question without being
+    -- anybody the world is drawing.
+    local stub = { id = "remote", px = 0, py = 0, cellX = 0, cellY = 0,
+                   facing = "down", def = { index = 1, name = "REMOTE" } }
+    local ow = {
+      map = { id = mapId },
+      npcs = { stub },
+      scriptMoves = {},
+      scriptMove = function() end,
+      facePlayer = function() end,
+      faceObject = function() end,
+      engageTrainer = function() end,
+      npcByIndex = function() return stub end,
+      npcByName = function() return stub end,
+      runner = { run = function() end,
+                 isRunning = function() return false end },
+      player = { inputLocked = false, cellX = 0, cellY = 0,
+                 px = 0, py = 0, facing = "down" },
+    }
+    function ow:trainerDefeated(npc)
+      local beaten = save.defeatedTrainers
+      return (beaten and npc and npc.id and beaten[npc.id]) == true
+    end
+    -- The engine's own spawn filter, which it publishes for exactly this.
+    -- Writing the rule out again here was a second copy of something that
+    -- already had one: it agreed today and would have drifted the first
+    -- time the engine learned a new way to take somebody off a map -- and
+    -- a mod adding one would never have been noticed at all.  The fallback
+    -- is only for a build that predates it being exposed.
+    function ow:objectVisible(npc)
+      local obj = npc and npc.def
+      if not obj then return true end
+      local fromEngine = engineVisible(save, mapId, obj)
+      if fromEngine ~= nil then return fromEngine end
+      local toggles = save.objectToggles and save.objectToggles[mapId]
+      local visible = not obj.hidden
+      if obj.name and toggles and toggles[obj.name] ~= nil then
+        visible = toggles[obj.name]
+      end
+      if obj.item and save.itemsTaken and save.itemsTaken[objId(obj)] then
+        visible = false
+      end
+      if obj.pokemon and save.defeatedTrainers
+         and save.defeatedTrainers[objId(obj)] then
+        visible = false
+      end
+      return visible
+    end
+    return ow
+  end
+
+  -- The same data, with the progress taken out.
+  --
+  -- The object toggles have to be put back to their compiled-in defaults
+  -- rather than copied: story events move them -- the VIRIDIAN old man
+  -- swaps himself out, the Rockets appear in CERULEAN -- so a copy of your
+  -- toggles would answer for a game already part-played.
+  local toggleDefaults
+  local function defaultToggles()
+    if toggleDefaults then return toggleDefaults end
+    toggleDefaults = {}
+    local ok, tog = pcall(require, "src.save_convert.data.toggle_objects")
+    if ok and type(tog) == "table" and type(tog.byBit) == "table" then
+      for _, entry in pairs(tog.byBit) do
+        local mapId, name, visible = entry[1], entry[2], entry[3]
+        if mapId and name then
+          toggleDefaults[mapId] = toggleDefaults[mapId] or {}
+          toggleDefaults[mapId][name] = visible
+        end
+      end
+    end
+    return toggleDefaults
+  end
+
+  -- Blank the progress, keep the furniture.
+  --
+  -- Naming the cleared fields and stopping there leaves a save with no
+  -- player in it, and a script that reads a name or a PIKACHU's mood off
+  -- the nil that comes back dies before it says what it would have given
+  -- you -- MELANIE and the ROUTE 1 man among them, read as blank and
+  -- dropped from the count.  So everything not named falls through to the
+  -- real save, which is how permissive already does it: the list below is
+  -- what progress means, and the rest is scaffolding the scripts need in
+  -- order to answer at all.
+  local function freshBaseline(game)
+    local real = (game and game.save) or {}
+    -- Copied key by key, not inherited.  The sandbox deep-copies a save with
+    -- pairs(), which walks only what the table holds itself -- so a baseline
+    -- that reached the player and the party through an __index metatable
+    -- arrived inside the probe with neither, and every script that reads a
+    -- name or a PIKACHU's mood died on the nil before saying what it would
+    -- have given you.  It changed nothing visible and cost a day.
+    local blank = {}
+    for k, v in pairs(real) do blank[k] = v end
+    blank.flags = {}
+    blank.inventory = {}
+    blank.boxes = {}
+    blank.pokedex = { owned = {}, seen = {} }
+    blank.defeatedTrainers = {}
+    blank.itemsTaken = {}
+    blank.objectToggles = defaultToggles()
+    return { data = game.data, save = blank }
+  end
+
+  -- Where you are, as a place rather than as a map.
+  --
+  -- "PEWTER CITY 3/9" should mean the town and the buildings in it, so the
+  -- number moves as you work through it.  Warps are the only thing joining
+  -- a town to its doors -- but following them wherever they lead walks
+  -- straight back out of town again: the underground path joins CERULEAN
+  -- to VERMILION, MT MOON joins ROUTE 3 to ROUTE 4, and a few hops later
+  -- the "place" is most of Kanto.
+  --
+  -- So the walk stops at daylight.  It starts from the outdoor map you are
+  -- standing on -- or, if you are inside, the one your building leads back
+  -- out to -- and spreads only through indoor maps.  Doors are followed,
+  -- roads are not.
+  -- Every map's place, worked out once for the whole game.
+  --
+  -- Asked one map at a time this rebuilt the index of which doors lead
+  -- where on every single call -- fine for the one map you are stood on,
+  -- and 208 times the work the moment anything wanted them all.
+  --
+  -- Assigning every map an anchor in one pass also settles a question the
+  -- per-map version left open: an indoor map reachable from two towns (the
+  -- UNDERGROUND PATH from either end) belongs to exactly one of them, so
+  -- the places add up to the whole rather than counting it twice.
+  local anchorCache, anchorFor = nil, nil
+  local function anchors(maps)
+    if anchorCache and anchorFor == maps then return anchorCache end
+    local function warpsOf(def)
+      return (type(def) == "table" and type(def.warps) == "table")
+             and def.warps or {}
+    end
+    -- LAST_MAP means "back out the way you came" and is not a map id
+    local function destOf(w)
+      local dest = w and w.destMap
+      if dest and dest ~= "LAST_MAP" and maps[dest] then return dest end
+      return nil
+    end
+
+    local of = {}
+    -- outdoors first: each is its own place, and the doors off it lead to
+    -- the buildings that belong to it
+    local queue, head = {}, 1
+    for id, def in pairs(maps) do
+      if isOutdoor(def) then
+        of[id] = id
+        queue[#queue + 1] = id
+      end
+    end
+    -- then spread inwards, through indoor maps only. Doors are followed,
+    -- roads are not: otherwise the tunnels join CERULEAN to VERMILION and a
+    -- few hops later the "place" is most of Kanto.
+    while head <= #queue do
+      local id = queue[head]; head = head + 1
+      for _, w in ipairs(warpsOf(maps[id])) do
+        local dest = destOf(w)
+        if dest and not of[dest] and not isOutdoor(maps[dest]) then
+          of[dest] = of[id]
+          queue[#queue + 1] = dest
+        end
+      end
+    end
+    -- and anywhere with no way out into daylight -- the ELITE FOUR rooms, a
+    -- cave chain -- is a place in its own right. Reached by walking the
+    -- doors backwards, since a building's own exit usually says LAST_MAP.
+    local into = {}
+    for id, def in pairs(maps) do
+      for _, w in ipairs(warpsOf(def)) do
+        local dest = destOf(w)
+        if dest then
+          into[dest] = into[dest] or {}
+          into[dest][id] = true
+        end
+      end
+    end
+    -- In a fixed order. Somewhere genuinely sealed off from daylight falls
+    -- back to naming itself, and walked with pairs() that was whichever map
+    -- the hash happened to reach first -- a different name from one run to
+    -- the next.
+    local orphans = {}
+    for id in pairs(maps) do
+      if not of[id] then orphans[#orphans + 1] = id end
+    end
+    table.sort(orphans)
+    for _, id in ipairs(orphans) do
+      if not of[id] then
+        local seen, q, h = { [id] = true }, { id }, 1
+        local found
+        while h <= #q and not found do
+          local at = q[h]; h = h + 1
+          for back in pairs(into[at] or {}) do
+            if not seen[back] then
+              seen[back] = true
+              if of[back] then found = of[back]; break end
+              q[#q + 1] = back
+            end
+          end
+        end
+        of[id] = found or id
+      end
+    end
+    anchorCache, anchorFor = of, maps
+    return of
+  end
+
+  local function placeAround(mapId, maps)
+    if not (mapId and maps and maps[mapId]) then return {}, nil end
+    local of = anchors(maps)
+    local anchor = of[mapId] or mapId
+    local place = {}
+    for id, a in pairs(of) do
+      if a == anchor then place[id] = true end
+    end
+    place[mapId] = true      -- always count the map you are actually on
+    return place, anchor
+  end
+
+  -- What to call a building sitting under its town.  VIRIDIAN CITY holds
+  -- VIRIDIAN_MART and VIRIDIAN_GYM, and repeating the town in every line
+  -- spends most of a fourteen-column box saying where you already know you
+  -- are -- so the shared part comes off and the mart is just MART.  A name
+  -- with nothing in common with the town keeps all of itself: PEWTER CITY
+  -- holds MUSEUM 1F, which is not a PEWTER-anything.
+  local function areaName(mapId, anchor)
+    local name = mapId
+    local town = (anchor or ""):match("^([A-Z0-9]+)_") or anchor
+    if town and mapId ~= anchor then
+      local shorter = mapId:match("^" .. town .. "_(.+)$")
+      if shorter and #shorter > 0 then name = shorter end
+    end
+    return (name:gsub("_", " "))
+  end
+
+  -- The half of the work that your progress cannot change.
+  --
+  -- Classifying every NPC in the game against a save with the progress
+  -- taken out gives the same answer every time, so it is worked out once
+  -- and kept.  It is half the cost of opening the page, and on the handheld
+  -- the page took long enough to notice.  Keyed on the map table it was
+  -- built from, so it can never answer for a different game.
+  -- Only this half is cached.  Caching the finished score as well was
+  -- tempting and wrong: an NPC leaving the map moves objectToggles, taking
+  -- a ball moves itemsTaken, and neither raises flag.changed -- so there is
+  -- no honest set of events to hang the invalidation on, and a score that
+  -- is occasionally a step behind is worse than one that costs a moment.
+  local baselineCache, baselineFor = nil, nil
+
+  -- A different save is a different set of people, and the baseline reads
+  -- the party and the player out of it, so it cannot be carried across.
+  function forgetScore() baselineCache, baselineFor = nil, nil end
+
+  local function completion()
+    local game = mod.world and mod.world.game
+    local maps = game and game.data and game.data.maps
+    if type(maps) ~= "table" then return nil end
+    local ow0 = mod.world and mod.world:overworld()
+    local hereNow = ow0 and ow0.map and ow0.map.id
+    -- The denominator has to answer "could this person ever have been a
+    -- task", and nothing weaker holds still.  Asked of a literal new save
+    -- the ROUTE 1 man reads as a smile -- he only offers the POTION once
+    -- there is something to use it on -- so he would join the total the day
+    -- you became eligible and leave it again the day you took it, and the
+    -- score would go backwards for doing the thing it is counting.
+    --
+    -- So: no receipts, but every prerequisite met.  Blank flags mean a gift
+    -- you have already claimed still counts as one you were once owed, and
+    -- the generous side means one you cannot reach yet counts too.  What
+    -- stays out is what was never a task on any save -- the flavour text,
+    -- which is most of the game.
+    local fresh = freshBaseline(game)
+    local place, anchor = placeAround(hereNow, maps)
+
+    -- a task, as opposed to a smile or nothing at all
+    local function isTask(tier) return tier ~= nil and tier ~= 3 end
+
+    -- Both passes run to completion before the other starts, and that is
+    -- deliberate.  The sandboxed copy of a save is cached against the game
+    -- it was taken from, so asking about the fresh save and then yours and
+    -- then the fresh one again throws the copy away every single time --
+    -- once per NPC, twice over, for every map in the game.  Whole pass,
+    -- then whole pass: the copy gets built twice in total.
+    -- Which map you are standing on is NOT baked in here: it changes every
+    -- time you walk through a door, and it is the one thing about this pass
+    -- that would have made the cache wrong.
+    local tracked = (baselineFor == maps) and baselineCache or nil
+    if not tracked then
+      tracked = {}
+      for mapId, def in pairs(maps) do
+        local view = MapScripts.get(mapId)
+        local talk = view and view.talk
+        if talk and type(def) == "table" then
+          local freshOw = remoteWorld(mapId, fresh)
+          for _, obj in ipairs(def.objects or {}) do
+            local entry = obj.text and talk[obj.text]
+            if entry ~= nil then
+              local npc = { id = mapId .. "_obj_" .. tostring(obj.index),
+                            def = obj,
+                            cellX = obj.x or 0, cellY = obj.y or 0,
+                            px = (obj.x or 0) * 16, py = (obj.y or 0) * 16 }
+              local ok, base, prog = pcall(tierFor, npc, entry, fresh,
+                                           freshOw, mapId, false)
+              tracked[#tracked + 1] = { mapId = mapId, entry = entry, npc = npc,
+                                        base = ok and base or nil,
+                                        prog = ok and prog or nil }
+            end
+          end
+          for _, sign in ipairs(def.signs or {}) do
+            local entry = sign.text and talk[sign.text]
+            if entry ~= nil then
+              local ok, base = pcall(signTierFor, entry, fresh, freshOw)
+              tracked[#tracked + 1] = { mapId = mapId, entry = entry,
+                                        sign = true, base = ok and base or nil }
+            end
+          end
+        end
+      end
+      baselineCache, baselineFor = tracked, maps
+    end
+
+    -- Somebody who is not on the map right now is one of two different
+    -- things.  BILL is not in his house when the game starts and his errand
+    -- is not yet yours to miss; the VIRIDIAN old man is gone once he has
+    -- finished with you.  Counting both the same way either marks half the
+    -- game done before it began, or never lets it finish.
+    --
+    -- The receipt is what tells them apart, and asking the compiled-in
+    -- default instead was wrong: OLD_MAN2 is not in that table at all --
+    -- his script hides him directly -- so he read as somebody who had never
+    -- turned up, dropped out of the total, and the score went from 1/4 to
+    -- 1/3 for finishing him.  A total that shrinks when you do the thing it
+    -- counts is worse than no total.  His flag, on the other hand, says
+    -- plainly that it happened.
+    local defaults = defaultToggles()
+    local function presence(item, realOw)
+      if realOw:objectVisible(item.npc) then return "here" end
+      local obj = item.npc.def
+      -- done with you: whatever they were holding has been handed over
+      if item.prog and alreadyClaimed(item.prog, game) then return "gone" end
+      if obj.item or obj.pokemon then return "gone" end
+      -- on the map at the start of the game and not on it now
+      local byMap = defaults[item.mapId]
+      if obj.name and byMap and byMap[obj.name] == true then return "gone" end
+      return "later"
+    end
+
+    local total, left, placeTotal, placeLeft = 0, 0, 0, 0
+    local worlds, counted = {}, {}
+    local perMap, areas = {}, {}
+    -- and the same tally for every place in the game, which costs only the
+    -- bucketing: these people have all been classified either way
+    local of, byPlace = anchors(maps), {}
+    for _, item in ipairs(tracked) do
+      local realOw = worlds[item.mapId] or remoteWorld(item.mapId, game)
+      worlds[item.mapId] = realOw
+      local outstanding, skip = false, false
+      if item.sign then
+        local ok, now = pcall(signTierFor, item.entry, game, realOw)
+        outstanding = ok and now ~= nil
+      else
+        local state = presence(item, realOw)
+        if state == "here" then
+          local ok, now = pcall(tierFor, item.npc, item.entry, game,
+                                realOw, item.mapId, false)
+          outstanding = ok and isTask(now)
+        elseif state == "later" then
+          -- has not turned up yet: not a task you have failed to do
+          skip = true
+        end
+        -- "gone" leaves outstanding false: they were here, they are not now
+      end
+      -- Counted if they are a task now, or would have been on a new game.
+      -- Either alone is too narrow.  The ROUTE 1 man with the POTION only
+      -- offers it once you have something to use it on, so a new game does
+      -- not see him; somebody you have already dealt with is not a task
+      -- today but was one, and dropping them would shrink the total every
+      -- time you finished something.
+      if not skip and (isTask(item.base) or outstanding) then
+        counted[#counted + 1] = item
+        item.outstanding = outstanding and true or false
+        item.mine = place[item.mapId] == true
+        total = total + 1
+        if outstanding then left = left + 1 end
+        local home = of[item.mapId] or item.mapId
+        local bucket = byPlace[home]
+        if not bucket then
+          bucket = { mapId = home, total = 0, left = 0 }
+          byPlace[home] = bucket
+        end
+        bucket.total = bucket.total + 1
+        if outstanding then bucket.left = bucket.left + 1 end
+        if place[item.mapId] then
+          placeTotal = placeTotal + 1
+          if outstanding then placeLeft = placeLeft + 1 end
+          local row = perMap[item.mapId]
+          if not row then
+            row = { mapId = item.mapId, total = 0, left = 0 }
+            perMap[item.mapId] = row
+            areas[#areas + 1] = row
+          end
+          row.total = row.total + 1
+          if outstanding then row.left = row.left + 1 end
+        end
+      end
+    end
+    tracked = counted
+
+    if total == 0 then return nil end
+
+    -- The town first, then its buildings in a fixed order, so the list does
+    -- not reshuffle itself between two looks at the same place.
+    table.sort(areas, function(a, b)
+      if (a.mapId == anchor) ~= (b.mapId == anchor) then
+        return a.mapId == anchor
+      end
+      return a.mapId < b.mapId
+    end)
+    for _, row in ipairs(areas) do
+      row.done = row.total - row.left
+      -- The town's own row is not called after the town: the heading above
+      -- it already says where you are, and repeating it only made the name
+      -- too long to sit beside its count -- VIRIDIAN CITY listing itself as
+      -- "VIRIDIAN C 0/2".  What that row actually counts is the part of the
+      -- place that is not one of the buildings.
+      if row.mapId == anchor then
+        row.name = isOutdoor(maps[anchor]) and "OUTSIDE" or "HERE"
+      else
+        row.name = areaName(row.mapId, anchor)
+      end
+    end
+
+    local result = {
+      total = total, done = total - left,
+      place = (placeTotal > 0 and anchor) and anchor:gsub("_", " ") or nil,
+      -- the map that names the place, so the list below can leave it out
+      anchor = anchor,
+      placeTotal = placeTotal, placeDone = placeTotal - placeLeft,
+      -- one line per building, so a town breaks down into the mart, the gym
+      -- and the museum rather than one lump
+      areas = areas,
+      -- and one entry per place in the game, keyed by the map that names it
+      byPlace = byPlace,
+      -- who was counted, so a test can say which people it expected rather
+      -- than only asserting a number that moves whenever anything changes
+      tasks = tracked,
+    }
+    return result
+  end
+
+  mod.exports.completion = completion
+  mod.exports.placeAround = placeAround
+  mod.exports.freshBaseline = freshBaseline
+
   -- ------- the guide
   --
   -- Words can only ever say "SMILE".  The question people actually have is
@@ -1604,18 +2154,192 @@ return function(mod)
     return got and pal or nil
   end
 
-  function Guide.new(game)
+  -- A name that fits, shortened the way a person would.
+  --
+  -- Dropping whole words beats cutting characters: VIRIDIAN CITY becomes
+  -- VIRIDIAN rather than VIRIDIAN C, and every town in Kanto is still told
+  -- apart by its first word. Only if one word is itself too long does it
+  -- get cut.
+  local function fitName(name, room)
+    if #name <= room then return name end
+    local words = {}
+    for word in name:gmatch("[^ ]+") do words[#words + 1] = word end
+    while #words > 1 do
+      words[#words] = nil
+      local shorter = table.concat(words, " ")
+      if #shorter <= room then return shorter end
+    end
+    return name:sub(1, room)
+  end
+
+  -- Where the save can prove you have been.
+  --
+  -- save.visited is only the eleven fly towns -- walking into a route or a
+  -- cave sets no flag at all, so on its own it leaves MT MOON and every
+  -- route off the list while their tasks still count in the total.
+  --
+  -- But anything you have beaten or picked up is written down against the
+  -- map it was on, as "<MAP>_obj_<n>". You cannot have beaten a trainer on
+  -- a map you have never stood on, so those keys name the places the flag
+  -- misses. It can only ever miss somewhere, never invent one, which is the
+  -- safe direction: it will not name a town before you have found it.
+  --
+  -- What it still cannot see is a place with nobody to fight and nothing to
+  -- pick up. In the whole game that is ROUTE 1 and ROUTE 5, one task each.
+  local function beenTo(game)
+    local save = (game and game.save) or {}
+    local been = {}
+    for id in pairs(save.visited or {}) do been[id] = true end
+    for _, keyed in ipairs({ save.defeatedTrainers, save.itemsTaken }) do
+      for key in pairs(keyed or {}) do
+        local mapId = tostring(key):match("^(.+)_obj_%d+$")
+        if mapId then been[mapId] = true end
+      end
+    end
+    return been
+  end
+
+  -- Everywhere you have been, with what is left in each.
+  -- A road between two places you have been is a road you have walked.
+  --
+  -- ROUTE 1 has nobody to fight and nothing to pick up, so nothing is ever
+  -- written down against it -- and yet it is the only way from PALLET to
+  -- VIRIDIAN, which the map's own connections say out loud. Where every
+  -- place a road runs between is somewhere you have been, so is the road.
+  --
+  -- Two ends at least. A dead end hanging off a town you have visited
+  -- proves nothing; a corridor between two of them is the whole argument.
+  --
+  -- Repeated until it stops finding anything, so a road between a town and
+  -- another road counts once that road does. Every step still rests on
+  -- somewhere the save actually recorded, so it cannot wander off into
+  -- places you have never been.
+  --
+  -- It can be generous later on: fly between two towns often enough and the
+  -- road between them is listed without you having walked it. By then you
+  -- have stood at both ends, so it names somewhere you know is there.
+  local function inferRoads(maps, been)
+    local changed = true
+    while changed do
+      changed = false
+      for id, def in pairs(maps) do
+        if not been[id] and type(def) == "table"
+           and type(def.connections) == "table" then
+          local ends, allKnown = 0, true
+          for _, c in pairs(def.connections) do
+            local other = type(c) == "table" and c.map or nil
+            if type(other) == "string" then
+              ends = ends + 1
+              if not been[other] then allKnown = false end
+            end
+          end
+          if ends >= 2 and allKnown then
+            been[id] = true
+            changed = true
+          end
+        end
+      end
+    end
+    return been
+  end
+
+  local function visitedPlaces(game, score, here)
+    local maps = game and game.data and game.data.maps
+    if type(maps) ~= "table" then return {} end
+    local been, of = inferRoads(maps, beenTo(game)), anchors(maps)
+    local reached = {}
+    for mapId in pairs(been) do
+      reached[of[mapId] or mapId] = true
+    end
+    local rows = {}
+    for mapId, bucket in pairs(score.byPlace or {}) do
+      -- not the place you are standing in: it is written out in full
+      -- directly above, and saying it twice is just noise
+      if reached[mapId] and mapId ~= here then rows[#rows + 1] = bucket end
+    end
+    -- The game's own map numbering, which is the towns in the order you
+    -- meet them and then the routes by number. Sorting the names instead
+    -- put ROUTE 10 above ROUTE 2.
+    table.sort(rows, function(a, b)
+      local ia = (maps[a.mapId] and maps[a.mapId].index) or math.huge
+      local ib = (maps[b.mapId] and maps[b.mapId].index) or math.huge
+      if ia ~= ib then return ia < ib end
+      return a.mapId < b.mapId
+    end)
+    return rows
+  end
+
+  -- The lines of the checklist: the score, where you are, and the
+  -- buildings of that place one per line.
+  local function checklistLines()
+    local ok, score = pcall(completion)
+    if not (ok and score) then return { "NOTHING YET" } end
+    local lines = { score.done .. "/" .. score.total .. " DONE" }
+    if score.place then
+      lines[#lines + 1] = ""
+      for _, line in ipairs(wrapWords(score.place, GUIDE_COLS)) do
+        lines[#lines + 1] = line
+      end
+      -- one line per building.  The count goes hard right and the name gets
+      -- whatever is left, cut rather than wrapped: a name folding onto a
+      -- second line separates it from its own number.
+      for _, area in ipairs(score.areas or {}) do
+        local tally = area.done .. "/" .. area.total
+        -- shortened the same way the places below it are, by dropping whole
+        -- words: MELANIES HOUSE becomes MELANIES, not MELANIES H
+        local name = fitName(area.name, GUIDE_COLS - #tally - 1)
+        lines[#lines + 1] = name
+                            .. string.rep(" ", GUIDE_COLS - #name - #tally)
+                            .. tally
+      end
+    end
+    -- then everywhere else you have been, one line each
+    local elsewhere = visitedPlaces(mod.world and mod.world.game, score,
+                                    score.anchor)
+    if #elsewhere > 0 then
+      lines[#lines + 1] = ""
+      for _, bucket in ipairs(elsewhere) do
+        local tally = (bucket.total - bucket.left) .. "/" .. bucket.total
+        local name = fitName((bucket.mapId:gsub("_", " ")),
+                             GUIDE_COLS - #tally - 1)
+        lines[#lines + 1] = name
+                            .. string.rep(" ", GUIDE_COLS - #name - #tally)
+                            .. tally
+      end
+    end
+    return lines
+  end
+
+  -- One screen, two contents.
+  --
+  -- They are the same scrolling list of entries and differ only in what is
+  -- in it, so they are the same screen rather than two that have to be kept
+  -- looking alike.  An entry with no tier draws no bubble and takes the
+  -- full width, which is what the checklist's lines want.
+  --
+  -- Splitting them is what keeps the legend free: it is reference text you
+  -- read once, and merged it could not be opened without running the count
+  -- over every map in the game first.
+  function Guide.new(game, kind)
     local self = setmetatable({ game = game, scroll = 0 }, Guide)
+    self.title = kind == "checklist" and "CHECKLIST" or "NPC BUBBLES"
     -- laid out once: each entry is its bubble and however many lines its
     -- description wraps to
     self.entries = {}
     local y = 0
-    for _, row in ipairs(GUIDE) do
-      local lines = wrapWords(row.text, GUIDE_COLS)
-      local height = math.max(16, #lines * G_ROW)
-      self.entries[#self.entries + 1] =
-        { tier = row.tier, lines = lines, y = y, height = height }
+    if kind == "checklist" then
+      local lines = checklistLines()
+      local height = #lines * G_ROW
+      self.entries[1] = { tier = nil, lines = lines, y = y, height = height }
       y = y + height + G_ENTRY_GAP
+    else
+      for _, row in ipairs(GUIDE) do
+        local lines = wrapWords(row.text, GUIDE_COLS)
+        local height = math.max(16, #lines * G_ROW)
+        self.entries[#self.entries + 1] =
+          { tier = row.tier, lines = lines, y = y, height = height }
+        y = y + height + G_ENTRY_GAP
+      end
     end
     self.contentHeight = math.max(0, y - G_ENTRY_GAP)
     return self
@@ -1648,7 +2372,7 @@ return function(mod)
     g.rectangle("fill", 0, 0, 160, 144)
     g.setColor(0, 0, 0, 1)
     Font.drawBox(0, 0, 20, 18)
-    Font.draw("NPC BUBBLES", 16, 16)
+    Font.draw(self.title or "NPC BUBBLES", 16, 16)
     g.rectangle("fill", 8, 30, 144, 1)
 
     local image = art(self.game)
@@ -1674,27 +2398,197 @@ return function(mod)
           end)
           g.setColor(0, 0, 0, 1)
         end
+        -- an entry with no bubble is not indented past one
+        local textX = entry.tier and 40 or 16
         for i, line in ipairs(entry.lines) do
-          Font.draw(line, 40, y + (i - 1) * G_ROW)
+          Font.draw(line, textX, y + (i - 1) * G_ROW)
         end
       end
     end
     g.setScissor()
 
-    -- the arrows are the game's own, and only appear when there is more
-    if self:maxScroll() > 0 then
-      if self.scroll > 0 then Font.draw("▲", 144, G_TOP) end
-      if self.scroll < self:maxScroll() then
-        Font.draw("▼", 144, G_BOTTOM - 8)
-      end
-    end
-
     -- inside the border, not through it: the bottom edge is y=136
     Font.draw("B TO GO BACK", 16, 122)
+
+    -- One arrow, on the footer line, and only while there is more below.
+    --
+    -- There were two: an up one as well, drawn at the top right.  The font
+    -- has no glyph for it, so it came out as a triangle pointing right --
+    -- an arrow that pointed nowhere the page could go, next to one that
+    -- did.  Down is the only direction worth announcing anyway: you can
+    -- see for yourself when there is something above you.
+    if self.scroll < self:maxScroll() then
+      Font.draw("▼", 144, 122)
+    end
     g.setColor(1, 1, 1, 1)
   end
 
-  mod.content.screens:register(GUIDE_SCREEN, { new = Guide.new })
+  local CHECKLIST_SCREEN = "npc_bubbles_checklist"
+  mod.content.screens:register(GUIDE_SCREEN,
+    { new = function(game) return Guide.new(game, "guide") end })
+  mod.content.screens:register(CHECKLIST_SCREEN,
+    { new = function(game) return Guide.new(game, "checklist") end })
+
+  -- ------- a page of our own on START > OPTIONS
+  --
+  -- The engine has no grouping to borrow: a row is { id, label, value,
+  -- step, activate } and nothing else -- no headers, no sections, no pages.
+  -- What it does have is `activate` and a stack any state may push onto,
+  -- which is how its own MODS and CONTROLS rows work, and how the other
+  -- mods sharing that menu do it. So the category is a real screen.
+  --
+  -- The settings sit here AND on the mod manager's page. That is not a
+  -- choice: the manager builds its page from whatever a mod declares with
+  -- options:define, so the row exists there whatever we do. What matters is
+  -- that neither can drift, which is why both write through the same call.
+  local SETTINGS_SCREEN = "npc_bubbles_settings"
+
+  -- The engine's own row renderer, so this page is the OPTIONS menu's boxes
+  -- rather than a lookalike: same four-at-a-time window, same cursor, same
+  -- scroll arrow, and it follows the menu if any of that ever moves.
+  local okRows, OptionRows = pcall(require, "src.ui.OptionRows")
+  if not okRows then OptionRows = nil end
+
+  -- Read back, never restated. The labels, defaults and bounds are declared
+  -- once at the top of this file; the loader keeps that list and the
+  -- manager reads the same one to build its page, so a label changed there
+  -- changes here too.
+  local function optionSchema(game)
+    local loader = game and game.mods
+    local schema = loader and loader.optionSchemas
+                   and loader.optionSchemas[mod.id]
+    return type(schema) == "table" and schema or {}
+  end
+
+  -- Writing goes through the manager's own setOption, borrowed with a
+  -- stand-in self, because a setting has to reach three places -- the live
+  -- save, the loader's copy that mod.options:get reads, and the file -- and
+  -- then raise mod.options_changed. Written out again here, this row and
+  -- the manager's row would agree until the day one of those steps changed.
+  -- setOption only ever touches self.game and self:persistOptions, so a
+  -- table carrying those two is a whole enough self for it.
+  local function writeOption(game, key, value)
+    local ok, MS = pcall(require, "src.mods.ManagerState")
+    if not (ok and type(MS) == "table"
+            and type(MS.setOption) == "function") then return false end
+    local borrowed = { game = game, persistOptions = MS.persistOptions }
+    return (pcall(MS.setOption, borrowed, mod.id, key, value))
+  end
+
+  local function optionValue(entry)
+    local v = mod.options:get(entry.key)
+    if v == nil then v = entry.default end
+    if entry.type == "toggle" then return v and "ON" or "OFF" end
+    return tostring(v)
+  end
+
+  local function stepOption(game, entry, dir)
+    local v = mod.options:get(entry.key)
+    if v == nil then v = entry.default end
+    local nextValue
+    if entry.type == "toggle" then
+      nextValue = not v
+    else
+      local low, high = entry.min or 0, entry.max or 100
+      nextValue = (tonumber(v) or low) + dir * (entry.step or 1)
+      -- wraps, so a dial at its top is one press from its bottom
+      if nextValue > high then nextValue = low
+      elseif nextValue < low then nextValue = high end
+    end
+    return writeOption(game, entry.key, nextValue)
+  end
+
+  -- Nothing here asks what the score is.
+  --
+  -- The count reads every map in the game. Put on a row, it would be paid
+  -- for by anyone who opened the OPTIONS menu for the sound volume, and
+  -- again on the way past this page -- twice over before anybody asked to
+  -- see it. It is worked out in one place, when the guide that shows it is
+  -- opened, and nowhere else. These two rows open something; they do not
+  -- report anything, which is how the engine's own CONTROLS row reads.
+  local function opener(screen)
+    return function(g)
+      local ok, Screens = pcall(require, "src.ui.Screens")
+      if ok and Screens and Screens.push then
+        pcall(Screens.push, g, screen)
+      end
+    end
+  end
+
+  local function settingsRows(game)
+    -- The checklist first: it is the one worth another look as you play,
+    -- where the guide is read once and remembered.
+    local rows = {
+      { id = "npc_bubbles_checklist", label = "CHECKLIST..",
+        activate = opener(CHECKLIST_SCREEN) },
+      { id = "npc_bubbles_guide", label = "GUIDE..",
+        activate = opener(GUIDE_SCREEN) },
+    }
+    for _, entry in ipairs(optionSchema(game)) do
+      if type(entry) == "table" and entry.key and entry.label then
+        rows[#rows + 1] = {
+          id = "npc_bubbles_opt_" .. entry.key,
+          label = entry.label,
+          value = function() return optionValue(entry) end,
+          step = function(g, dir) return stepOption(g, entry, dir) end,
+        }
+      end
+    end
+    return rows
+  end
+
+  local Settings = {}
+  Settings.__index = Settings
+  -- opaque like the menu it sits on: what is underneath is fully covered
+  Settings.isOpaque = true
+
+  function Settings:sgbPalettes(game)
+    local ok, P = pcall(require, "src.render.PaletteFX")
+    if not (ok and P and P.wholeNamed) then return nil end
+    local got, pal = pcall(P.wholeNamed, game.data, "MEWMON")
+    return got and pal or nil
+  end
+
+  function Settings.new(game)
+    return setmetatable({ game = game, index = 1, scroll = 0,
+                          rows = settingsRows(game) }, Settings)
+  end
+
+  -- Modelled on OptionsMenu:update, down to CANCEL sitting one past the
+  -- last row, so the page it opens from and this one behave identically.
+  function Settings:update()
+    local input = self.game and self.game.input
+    if not input then return end
+    local rows = self.rows
+    local backRow = #rows + 1
+    if input:wasPressed("up") then
+      self.index = self.index > 1 and self.index - 1 or backRow
+    elseif input:wasPressed("down") then
+      self.index = self.index < backRow and self.index + 1 or 1
+    elseif input:wasPressed("left") or input:wasPressed("right")
+        or input:wasPressed("a") then
+      local dir = input:wasPressed("left") and -1 or 1
+      local row = rows[self.index]
+      if row and row.activate then
+        if input:wasPressed("a") then row.activate(self.game) end
+      elseif row and row.step then
+        row.step(self.game, dir)
+      elseif input:wasPressed("a") then
+        self.game.stack:pop()
+      end
+    elseif input:wasPressed("b") or input:wasPressed("start") then
+      self.game.stack:pop()
+    end
+    self.scroll = OptionRows.clampScroll(self.index, self.scroll or 0,
+                                         #rows, backRow)
+  end
+
+  function Settings:draw()
+    OptionRows.draw(self.game, self.rows, self.index, self.scroll or 0,
+                    "BACK", #self.rows + 1)
+  end
+
+  mod.content.screens:register(SETTINGS_SCREEN, { new = Settings.new })
 
   mod.hooks:wrap("ui.options.rows", function(nextFn, game, rows)
     local out = nextFn(game, rows)
@@ -1703,19 +2597,21 @@ return function(mod)
     for _, row in ipairs(out) do
       if row.id ~= ROW_ID then kept[#kept + 1] = row end
     end
-    -- the same hook that hides the pipeline row adds the guide: one entry in
-    -- START > OPTIONS, opened with A
-    kept[#kept + 1] = {
-      id = "npc_bubbles_guide",
-      label = "NPC BUBBLES",
-      value = function() return "GUIDE" end,
-      activate = function(g)
-        local ok, Screens = pcall(require, "src.ui.Screens")
-        if ok and Screens and Screens.push then
-          pcall(Screens.push, g, GUIDE_SCREEN)
-        end
-      end,
-    }
+    -- At the front, not the back.
+    --
+    -- A mod's rows land at the end of this list by default, and the end of
+    -- this list is thirty rows down: past every engine setting, in a menu
+    -- that shows four at a time. Nobody finds anything there.
+    --
+    -- Not a claim on being FIRST, which is not ours to make -- whichever
+    -- mod's hook runs last takes that -- but near the front either way.
+    -- The trailing dots are the game's own word for a row that opens
+    -- something rather than cycling a value.
+    table.insert(kept, 1, {
+      id = "npc_bubbles_settings",
+      label = "NPC BUBBLES..",
+      activate = opener(SETTINGS_SCREEN),
+    })
     return kept
   end)
 

@@ -902,17 +902,119 @@ do
     T.check(ids["tilt"] and ids["pipeline:voxel"] and ids["pipeline:tiltshift"],
       "every other row is left exactly where it was")
 
-    -- the same hook adds the guide: a word can only ever say "SMILE", so the
-    -- guide shows the crops themselves
-    T.check(ids["npc_bubbles_guide"], "and a guide row is added in its place")
+    -- the same hook adds our own row in its place
+    T.check(ids["npc_bubbles_settings"], "and our own row is added in its place")
     T.eq(#out, #incoming, "one row out, one row in")
-    local guide
+    local ours
     for _, row in ipairs(out) do
-      if row.id == "npc_bubbles_guide" then guide = row end
+      if row.id == "npc_bubbles_settings" then ours = row end
     end
-    T.check(type(guide.activate) == "function", "the guide row opens something")
-    T.check(Data.screens and Data.screens.npc_bubbles_guide ~= nil,
+    T.check(type(ours.activate) == "function", "the row opens something")
+    T.eq(ours.label, "NPC BUBBLES..",
+      "and says so: the trailing dots are the game's own word for it")
+    T.check(Data.screens and Data.screens.npc_bubbles_settings ~= nil,
       "and the screen it opens is registered")
+    T.check(Data.screens and Data.screens.npc_bubbles_guide ~= nil,
+      "with the guide still registered, opened from inside it")
+
+    -- A mod's rows land at the END of this list by default, thirty rows
+    -- past the top in a menu that shows four at a time. Being near the
+    -- front is the whole point of the change; being FIRST is not claimed,
+    -- since whichever mod's hook runs last takes that.
+    T.eq(out[1] and out[1].id, "npc_bubbles_settings",
+      "placed at the front rather than buried at the end")
+
+    -- The count reads every map in the game, so nothing on the way TO the
+    -- guide may ask for it. Reported on this row it would be paid for by
+    -- anyone who opened OPTIONS for the sound volume.
+    T.eq(ours.value, nil, "the row reports no count -- it only opens")
+  end
+
+  -- ------- the page that row opens
+  do
+    local loader = run.loader
+    local game = loader.game
+    -- what the engine hands a screen: the loader lives on game.mods, which
+    -- is where both the declared schema and the live values are read from
+    game.mods = loader
+    game.save.options = game.save.options or {}
+    local factory = Data.screens.npc_bubbles_settings
+    local made, page = pcall(function()
+      local f = type(factory) == "table" and factory.new or factory
+      return f(game)
+    end)
+    T.check(made and page, "the settings page constructs (" .. tostring(page) .. ")")
+
+    if made and page then
+      local labels, byLabel = {}, {}
+      for _, row in ipairs(page.rows) do
+        labels[#labels + 1] = row.label
+        byLabel[row.label] = row
+      end
+      T.eq(labels[1], "CHECKLIST..",
+        "the checklist is first -- the one worth another look as you play")
+      T.eq(labels[2], "GUIDE..", "then the guide, read once and remembered")
+
+      -- The count reads every map in the game, so nothing on the way TO the
+      -- guide is allowed to ask for it. On a row it would be paid for by
+      -- anyone opening OPTIONS for the sound volume, and again on the way
+      -- past this page -- twice over before anybody asked to see it.
+      T.eq(page.rows[1].value, nil, "the checklist row reports nothing")
+      T.eq(page.rows[2].value, nil, "and neither does the guide row")
+
+      -- Built from the declaration rather than a second list written out
+      -- here: an option added at the top of the mod appears on this page
+      -- without anybody remembering to add it twice.
+      local schema = loader.optionSchemas and loader.optionSchemas.npc_bubbles
+      if type(schema) == "table" then
+        T.eq(#page.rows, #schema + 2,
+          "one row per declared option, plus the checklist and the guide")
+        for _, entry in ipairs(schema) do
+          T.check(byLabel[entry.label] ~= nil,
+            "'" .. tostring(entry.label) .. "' is on the page")
+        end
+      end
+      for _, l in ipairs(labels) do
+        T.check(#l <= 17, "'" .. l .. "' fits the label line")
+      end
+      -- it is the engine's own row renderer, so this is mostly a check that
+      -- every row hands it what it asks for: a label and a value function
+      T.check(pcall(page.draw, page), "the page draws")
+      page.index = #page.rows + 1          -- BACK, one past the last row
+      T.check(pcall(page.draw, page), "and draws with BACK selected")
+
+      -- The promise of having it in two places: changing it HERE has to
+      -- land where mod.options:get reads it and where the file is written
+      -- from, or this page and the mod manager's page would each answer
+      -- with their own value and the player would be told two things.
+      local heard = byLabel["CLEAR AFTER TALK"]
+      T.check(heard ~= nil, "the smile-clearing toggle is on the page")
+      if heard then
+        T.eq(heard.value(), "OFF", "off to begin with, as declared")
+        heard.step(game, 1)
+        T.eq(heard.value(), "ON", "and the row shows the change")
+        T.eq(loader.modOptions and loader.modOptions.npc_bubbles
+             and loader.modOptions.npc_bubbles.heard, true,
+          "it reached the copy mod.options:get reads")
+        T.eq(game.save.options.modOptions
+             and game.save.options.modOptions.npc_bubbles
+             and game.save.options.modOptions.npc_bubbles.heard, true,
+          "and the copy the save is written from")
+        heard.step(game, 1)
+        T.eq(heard.value(), "OFF", "and it goes back")
+      end
+
+      -- A dial wraps rather than sticking at its end
+      local fade = byLabel["LATER FADE"]
+      if fade then
+        for _ = 1, 40 do fade.step(game, 1) end
+        local n = tonumber(fade.value())
+        T.check(n ~= nil and n >= 20 and n <= 100,
+          "the fade dial stays inside its bounds (" .. fade.value() .. ")")
+      end
+    end
+    run.loader.modOptions.npc_bubbles = {}
+    game.save.options.modOptions = nil
   end
 
   -- ------- the toggles name the symbol they switch
@@ -1440,6 +1542,504 @@ do
   run.loader.modOptions.npc_bubbles = {}
   liveOw.npcs = {}
   save.flags, save.inventory = {}, {}
+end
+
+-- ------- how much is left
+--
+-- Every case here is a bug this actually had.  The count reads every map in
+-- the game against two different saves, and each of the mistakes below
+-- produced a plausible number rather than an error -- which is exactly why
+-- a plausible number is not evidence.
+do
+  local MapScripts = require("src.script.MapScripts")
+  local E = run.loader.exports.npc_bubbles
+  local save = run.loader.game.save
+  save.inventory = {}
+  save.pokedex = { owned = {}, seen = {} }
+  save.flags = {}
+  save.player = { name = "ASH" }
+  save.party = { { species = "PIKACHU", level = 5 } }
+  save.objectToggles = {}
+  save.itemsTaken = {}
+  save.defeatedTrainers = {}
+
+  -- The baseline is the denominator: a save with the progress taken out.
+  -- It has to blank what you have DONE while keeping what you ARE, because
+  -- the sandbox deep-copies a save with pairs() -- anything reached through
+  -- a metatable arrives inside the probe missing, and a script that reads a
+  -- name off the nil dies before it can say what it would have given you.
+  do
+    local baseline = E.freshBaseline(run.loader.game)
+    T.eq(next(baseline.save.flags), nil, "the baseline clears the flags")
+    T.eq(next(baseline.save.pokedex.owned), nil, "and the pokedex")
+    T.eq(rawget(baseline.save, "player") ~= nil, true,
+      "but keeps the player as its OWN key, not through a metatable")
+    T.eq(rawget(baseline.save, "party") ~= nil, true,
+      "and the party, for the same reason")
+    T.eq(baseline.save.player.name, "ASH", "with the real values intact")
+    save.flags.EVENT_SOMETHING = true
+    T.eq(E.freshBaseline(run.loader.game).save.flags.EVENT_SOMETHING, nil,
+      "a flag set in the real save never reaches the baseline")
+    T.eq(save.flags.EVENT_SOMETHING, true, "and blanking it left yours alone")
+    save.flags = {}
+  end
+
+  -- one small world, built by hand: a giver, a flavour NPC and a smile
+  local GIVER = { { "check_flag", "EVENT_TOOK_IT" },
+                  { "jump_if_true", 6 },
+                  { "give_item", "POTION" },
+                  { "set_flag", "EVENT_TOOK_IT" },
+                  { "jump", "end" },
+                  { "show_text", "nothing more" } }
+  MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+    GIVER   = GIVER,
+    FLAVOUR = { { "show_text", "I like ledges" } },
+    MOODY   = { { "check_flag", "EVENT_ELSEWHERE" },
+                { "jump_if_true", 4 },
+                { "show_text", "before" },
+                { "jump", "end" },
+                { "show_text", "after" } },
+  } })
+  MapScripts.invalidate("VIRIDIAN_CITY")
+
+  local function obj(name, text, extra)
+    local o = { name = name, text = text, index = 1, x = 1, y = 1 }
+    for k, v in pairs(extra or {}) do o[k] = v end
+    return o
+  end
+  local function world(objects, signs)
+    Data.maps = { VIRIDIAN_CITY = { objects = objects, signs = signs or {},
+                                    warps = {}, tileset = "OVERWORLD" } }
+  end
+  local function count()
+    return E.completion()
+  end
+
+  do
+    world({ obj("A_GIVER", "GIVER"), obj("A_TALKER", "FLAVOUR"),
+            obj("A_MOODY", "MOODY") })
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    local r = count()
+    T.eq(r.total, 1, "only the giver is a task -- flavour and a smile are not")
+    T.eq(r.done, 0, "and it is not done yet")
+
+    -- doing the thing moves it across, and does NOT drop it from the total:
+    -- a denominator that shrinks when you finish something makes the score
+    -- go backwards for doing the very thing it counts
+    save.flags.EVENT_TOOK_IT = true
+    local after = count()
+    T.eq(after.total, 1, "the total holds when the gift is claimed")
+    T.eq(after.done, 1, "and it counts as done")
+    save.flags = {}
+  end
+
+  -- Somebody who is not on the map is one of two different things, and the
+  -- compiled-in default says which.  BILL is not in his house at the start
+  -- and his errand is not yet yours to miss; the VIRIDIAN old man is there
+  -- from the beginning and gone once he is finished with you.  Counting
+  -- both the same way marks half the game done before it begins.
+  do
+    world({ obj("VIRIDIANCITY_OLD_MAN_SLEEPY", "GIVER") })
+    T.eq(count().total, 1, "present: counted")
+    save.objectToggles = { VIRIDIAN_CITY = { VIRIDIANCITY_OLD_MAN_SLEEPY = false } }
+    local gone = count()
+    T.eq(gone.total, 1, "someone who starts on the map and has left is a task")
+    T.eq(gone.done, 1, "-- a finished one")
+
+    world({ obj("NOBODY_YET", "GIVER") })
+    save.objectToggles = { VIRIDIAN_CITY = { NOBODY_YET = false } }
+    -- nothing trackable at all reports nothing, rather than 0/0
+    T.eq(count(), nil,
+      "someone who has not turned up yet is not a task you have missed")
+    save.objectToggles = {}
+
+    -- The VIRIDIAN old man, and the reason the default table is not enough
+    -- on its own.  OLD_MAN2 is hidden by his own script rather than by a
+    -- toggle bit, so he appears in no default table at all -- and reading
+    -- only that table made him look like somebody who had never turned up.
+    -- He dropped out of the total the moment he was finished with, and the
+    -- score went from 1/4 to 1/3 for doing the thing it was counting.
+    -- His receipt is the thing that says plainly that it happened.
+    world({ obj("SCRIPT_HIDDEN_MAN", "GIVER") })
+    T.eq(count().total, 1, "on the map and unfinished: a task")
+    save.flags.EVENT_TOOK_IT = true
+    save.objectToggles = { VIRIDIAN_CITY = { SCRIPT_HIDDEN_MAN = false } }
+    local after = count()
+    T.check(after ~= nil,
+      "hidden by a script with the receipt claimed is still counted")
+    T.eq(after and after.total, 1,
+      "hidden by a script with the receipt claimed stays in the total")
+    T.eq(after and after.done, 1,
+      "and counts as done, not as somebody who never came")
+    save.flags, save.objectToggles = {}, {}
+  end
+
+  -- Whether somebody is on a map at all is the engine's rule, not a second
+  -- copy of it living here.  The engine publishes it for reuse, and a mod
+  -- that adds a new way to take somebody off a map replaces it -- so this
+  -- has to be read at the moment it is asked, not remembered from load.
+  do
+    world({ obj("A_GIVER", "GIVER") })
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    T.eq(count().total, 1, "counted while the engine says they are there")
+    local Ow = require("src.world.OverworldController")
+    local real = Ow.objectVisible
+    Ow.objectVisible = function() return false end
+    local hidden = count()
+    Ow.objectVisible = real
+    T.eq(hidden, nil,
+      "and the engine saying otherwise is what takes them out of the count")
+    T.eq(count().total, 1, "with the real rule back, so is the count")
+  end
+
+  -- Each building in a town gets its own line, rather than the whole town
+  -- arriving as one lump.
+  do
+    Data.maps = {
+      VIRIDIAN_CITY = { tileset = "OVERWORLD",
+                        objects = { obj("A_GIVER", "GIVER") }, signs = {},
+                        warps = { { destMap = "VIRIDIAN_MART" },
+                                  { destMap = "VIRIDIAN_GYM" } } },
+      VIRIDIAN_MART = { tileset = "HOUSE",
+                        objects = { obj("B_GIVER", "GIVER") }, signs = {},
+                        warps = { { destMap = "LAST_MAP" } } },
+      VIRIDIAN_GYM  = { tileset = "GYM",
+                        objects = { obj("C_GIVER", "GIVER"),
+                                    obj("C_TALKER", "FLAVOUR") }, signs = {},
+                        warps = { { destMap = "LAST_MAP" } } },
+    }
+    for _, id in ipairs({ "VIRIDIAN_MART", "VIRIDIAN_GYM" }) do
+      MapScripts.attachBase(id, { talk = { GIVER = GIVER,
+                                           FLAVOUR = { { "show_text", "hi" } } } })
+      MapScripts.invalidate(id)
+    end
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    local r = count()
+    T.eq(r.placeTotal, 3, "the town counts its buildings' tasks as well")
+    T.eq(#r.areas, 3, "and lists each one separately")
+    T.eq(r.areas[1].name, "OUTSIDE",
+      "the town's own row does not repeat the heading above it")
+    T.eq(r.areas[2].name, "GYM", "then its buildings, without repeating it")
+    T.eq(r.areas[2].total, 1, "the gym's own count -- its flavour NPC is out")
+    T.eq(r.areas[3].name, "MART", "in a fixed order, so it cannot reshuffle")
+
+    -- standing in the mart reports the same town and the same breakdown
+    liveOw.map = { id = "VIRIDIAN_MART" }
+    local inside = count()
+    T.eq(inside.place, "VIRIDIAN CITY", "from inside, still the town")
+    T.eq(#inside.areas, 3, "with the whole town still broken down")
+  end
+
+  -- The place line groups a town with the buildings in it.  Warps are the
+  -- only link -- but following them wherever they lead walks out of town
+  -- through the tunnels and a few hops later the "place" is most of Kanto.
+  do
+    local maps = {
+      PEWTER_CITY  = { tileset = "OVERWORLD",
+                       warps = { { destMap = "PEWTER_GYM" },
+                                 { destMap = "PEWTER_MART" } } },
+      PEWTER_GYM   = { tileset = "HOUSE", warps = { { destMap = "PEWTER_CITY" } } },
+      PEWTER_MART  = { tileset = "HOUSE",
+                       warps = { { destMap = "PEWTER_CITY" },
+                                 { destMap = "TUNNEL" } } },
+      TUNNEL       = { tileset = "CAVERN", warps = { { destMap = "FAR_CITY" } } },
+      FAR_CITY     = { tileset = "OVERWORLD", warps = { { destMap = "FAR_HOUSE" } } },
+      FAR_HOUSE    = { tileset = "HOUSE", warps = { { destMap = "FAR_CITY" } } },
+    }
+    local place = E.placeAround("PEWTER_CITY", maps)
+    T.eq(place.PEWTER_CITY, true, "the town itself")
+    T.eq(place.PEWTER_GYM, true, "and the gym in it")
+    T.eq(place.PEWTER_MART, true, "and the mart")
+    T.eq(place.FAR_CITY, nil, "but the walk stops at the next town")
+    T.eq(place.FAR_HOUSE, nil, "and never reaches what is inside it")
+
+    -- standing indoors still names the town, not the room
+    local inside, anchor = E.placeAround("PEWTER_GYM", maps)
+    T.eq(anchor, "PEWTER_CITY", "from inside, the place is the town outside")
+    T.eq(inside.PEWTER_MART, true, "with the rest of the town counted too")
+
+    -- a warp that means "back the way you came" is not a map
+    local lastMap = { HOUSE = { tileset = "HOUSE",
+                                warps = { { destMap = "LAST_MAP" } } } }
+    local ok = pcall(E.placeAround, "HOUSE", lastMap)
+    T.eq(ok, true, "LAST_MAP is skipped rather than followed")
+
+    -- The shape most buildings in the game actually have: the door out says
+    -- LAST_MAP rather than naming the town, so the only thing joining the
+    -- museum to PEWTER CITY is the town's own door pointing in.  Walking
+    -- doors forwards alone would leave every such building its own place,
+    -- and standing inside one would stop naming the town you are in.
+    local realish = {
+      VIRIDIAN_CITY = { tileset = "OVERWORLD",
+                        warps = { { destMap = "VIRIDIAN_HOUSE" },
+                                  { destMap = "VIRIDIAN_GYM" } } },
+      VIRIDIAN_HOUSE = { tileset = "HOUSE",
+                         warps = { { destMap = "LAST_MAP" } } },
+      VIRIDIAN_GYM  = { tileset = "GYM", warps = { { destMap = "LAST_MAP" } } },
+    }
+    -- ROUTE 23 and INDIGO PLATEAU are PLATEAU-tileset, which the engine
+    -- does not call outdoor. Left that way they are swallowed by whatever
+    -- town has a door onto them, instead of being places in their own
+    -- right -- and the whole end of the game loses its name. The town map
+    -- makes the same exception so INDIGO PLATEAU reaches the fly list.
+    --
+    -- Checked by MEMBERSHIP, not by the name: a sealed-off block happens to
+    -- name itself the same way by falling back, so the name alone cannot
+    -- tell the two behaviours apart.
+    local plateau = {
+      A_TOWN         = { tileset = "OVERWORLD",
+                         warps = { { destMap = "INDIGO_PLATEAU" } } },
+      INDIGO_PLATEAU = { tileset = "PLATEAU",
+                         warps = { { destMap = "A_TOWN" } } },
+    }
+    local townPlace = E.placeAround("A_TOWN", plateau)
+    T.eq(townPlace.INDIGO_PLATEAU, nil,
+      "a PLATEAU map is a place of its own, not swallowed by the town next door")
+    T.eq(select(2, E.placeAround("INDIGO_PLATEAU", plateau)), "INDIGO_PLATEAU",
+      "and it names itself")
+
+    -- Somewhere genuinely sealed off from daylight falls back to naming
+    -- itself. Walked with pairs() that was whichever map the hash reached
+    -- first, so the same cave named itself differently from one run to the
+    -- next -- HALL OF FAME, then LORELEIS ROOM, then somewhere else again.
+    --
+    -- What is asserted is the guarantee sorting gives: the first name in
+    -- order. The failure it prevents cannot be reproduced inside one run --
+    -- pairs() is stable within a process and only varies between them --
+    -- so this pins the rule rather than catching the old symptom.
+    -- joined both ways, as real rooms are: a map nothing warps INTO is
+    -- correctly a place of its own, which is not what is being tested here
+    local sealed = {
+      C_ROOM = { tileset = "CAVERN", warps = { { destMap = "B_ROOM" } } },
+      B_ROOM = { tileset = "CAVERN", warps = { { destMap = "A_ROOM" },
+                                               { destMap = "C_ROOM" } } },
+      A_ROOM = { tileset = "CAVERN", warps = { { destMap = "B_ROOM" } } },
+    }
+    T.eq(select(2, E.placeAround("C_ROOM", sealed)), "A_ROOM",
+      "a sealed-off block names itself after its first map, in order")
+
+    local group, town = E.placeAround("VIRIDIAN_HOUSE", realish)
+    T.eq(town, "VIRIDIAN_CITY",
+      "a building whose only way out is LAST_MAP still belongs to its town")
+    T.eq(group.VIRIDIAN_GYM, true, "and brings the rest of the town with it")
+  end
+
+  -- The score is the first thing on the guide page, and the page wraps to a
+  -- 14-column box.  A line wider than that runs out through the border.
+  do
+    world({ obj("A_GIVER", "GIVER"), obj("A_TALKER", "FLAVOUR") })
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    require("src.ui.Screens").invalidate()
+    local factory = Data.screens.npc_bubbles_guide
+    local made, page = pcall(function()
+      local f = type(factory) == "table" and factory.new or factory
+      return f(run.loader.game)
+    end)
+    T.check(made and page, "the guide builds (" .. tostring(page) .. ")")
+    if made and page then
+      -- The legend, and ONLY the legend. The count is on its own screen
+      -- now: merged, this page could not be opened without first running
+      -- the sweep over every map in the game, to read four lines of
+      -- reference text that never change.
+      for i, e in ipairs(page.entries) do
+        T.check(e.tier ~= nil,
+          "guide entry " .. i .. " is a bubble, not a tally")
+      end
+      T.eq(#page.entries, 4, "one entry per bubble the mod can draw")
+      local widest = 0
+      for _, e in ipairs(page.entries) do
+        for _, line in ipairs(e.lines) do widest = math.max(widest, #line) end
+      end
+      T.check(widest <= 14,
+        "every line fits the box (widest is " .. widest .. ")")
+      T.check(pcall(page.draw, page), "and the page draws")
+      page.scroll = page:maxScroll()
+      T.check(pcall(page.draw, page), "and draws scrolled to the bottom")
+    end
+
+    -- and the checklist is the one carrying the count
+    local listFactory = Data.screens.npc_bubbles_checklist
+    local built, list = pcall(function()
+      local f = type(listFactory) == "table" and listFactory.new or listFactory
+      return f(run.loader.game)
+    end)
+    T.check(built and list, "the checklist builds (" .. tostring(list) .. ")")
+    if built and list then
+      T.eq(list.title, "CHECKLIST", "under its own heading")
+      local first = list.entries[1]
+      T.eq(first.tier, nil, "its lines carry no bubble of their own")
+      T.eq(first.lines[1], "0/1 DONE", "and it opens with the count")
+      local widest = 0
+      for _, e in ipairs(list.entries) do
+        for _, line in ipairs(e.lines) do widest = math.max(widest, #line) end
+      end
+      T.check(widest <= 14,
+        "every line fits the box (widest is " .. widest .. ")")
+      T.check(pcall(list.draw, list), "and it draws")
+    end
+
+    -- ------- everywhere else you have been
+    --
+    -- save.visited only ever holds the eleven fly towns -- a route or a cave
+    -- sets no flag when you walk into it. What DOES get written down is
+    -- anything you beat or picked up, against the map it was on, so those
+    -- keys name the places the flag misses. It can only miss somewhere,
+    -- never invent one: it will not name a town before you have found it.
+    do
+      for _, id in ipairs({ "PEWTER_CITY", "CERULEAN_CITY" }) do
+        MapScripts.attachBase(id, { talk = { GIVER = GIVER } })
+        MapScripts.invalidate(id)
+      end
+      Data.maps = {
+        VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {}, signs = {}, index = 1,
+                          objects = { obj("V_GIVER", "GIVER") } },
+        PEWTER_CITY   = { tileset = "OVERWORLD", warps = {}, signs = {}, index = 2,
+                          objects = { obj("P_GIVER", "GIVER") } },
+        CERULEAN_CITY = { tileset = "OVERWORLD", warps = {}, signs = {}, index = 3,
+                          objects = { obj("C_GIVER", "GIVER") } },
+      }
+      liveOw.map = { id = "CERULEAN_CITY" }
+      local f = type(listFactory) == "table" and listFactory.new or listFactory
+
+      local function listed()
+        local page = f(run.loader.game)
+        local out = {}
+        for _, e in ipairs(page.entries) do
+          for _, l in ipairs(e.lines) do out[#out + 1] = l end
+        end
+        return table.concat(out, "\n"), out
+      end
+
+      -- CERULEAN is marked visited too, so the only thing that can keep it
+      -- off the list is that it is the place you are standing in -- which
+      -- is what this is checking. Left unvisited it would be absent anyway
+      -- and the check would prove nothing.
+      save.visited = { VIRIDIAN_CITY = true, CERULEAN_CITY = true }
+      save.defeatedTrainers, save.itemsTaken = {}, {}
+      local all = listed()
+      T.check(all:find("VIRIDIAN"), "a town you have visited is listed")
+      T.check(not all:find("PEWTER"),
+        "one you have not been to is not, however much is left in it")
+      T.check(not all:match("CERULEAN%s+%d+/%d+"),
+        "and the place you are standing in is not repeated below itself")
+
+      -- the part save.visited cannot do: a route or a cave
+      save.defeatedTrainers = { PEWTER_CITY_obj_1 = true }
+      T.check(listed():find("PEWTER"),
+        "somewhere you beat a trainer counts as somewhere you have been")
+      save.defeatedTrainers = {}
+      save.itemsTaken = { PEWTER_CITY_obj_9 = true }
+      T.check(listed():find("PEWTER"), "and so does somewhere you took an item")
+
+      -- A road between two places you have been is a road you have walked.
+      -- ROUTE 1 has nobody to fight and nothing to pick up, so nothing is
+      -- ever written down against it -- but it is the only way from PALLET
+      -- to VIRIDIAN, and the map says so itself.
+      do
+        MapScripts.attachBase("ROUTE_1", { talk = { GIVER = GIVER } })
+        MapScripts.attachBase("ROUTE_9", { talk = { GIVER = GIVER } })
+        MapScripts.invalidate("ROUTE_1"); MapScripts.invalidate("ROUTE_9")
+        -- A NEW table, not the old one with maps added to it: both the
+        -- baseline and the place walk are cached against the table they
+        -- were worked out from, so a map added in place is never seen.
+        local was = Data.maps
+        Data.maps = {
+          VIRIDIAN_CITY = was.VIRIDIAN_CITY, PEWTER_CITY = was.PEWTER_CITY,
+          CERULEAN_CITY = was.CERULEAN_CITY,
+          ROUTE_1 = { tileset = "OVERWORLD", warps = {}, signs = {},
+            index = 12, objects = { obj("R1_GIVER", "GIVER") },
+            connections = { north = { map = "VIRIDIAN_CITY" },
+                            south = { map = "PEWTER_CITY" } } },
+          -- a dead end off a town you have been to proves nothing
+          ROUTE_9 = { tileset = "OVERWORLD", warps = {}, signs = {},
+            index = 13, objects = { obj("R9_GIVER", "GIVER") },
+            connections = { west = { map = "VIRIDIAN_CITY" } } },
+        }
+        save.visited = { VIRIDIAN_CITY = true, PEWTER_CITY = true }
+        save.defeatedTrainers, save.itemsTaken = {}, {}
+        liveOw.map = { id = "CERULEAN_CITY" }
+        local roads = listed()
+        T.check(roads:find("ROUTE 1"),
+          "a road between two places you have been is listed")
+        T.check(not roads:find("ROUTE 9"),
+          "a dead end off one of them is not -- it proves nothing")
+
+        -- and one end unknown keeps it off
+        save.visited = { VIRIDIAN_CITY = true }
+        T.check(not listed():find("ROUTE 1"),
+          "nor is a road whose far end you have not reached")
+        save.visited = { VIRIDIAN_CITY = true, PEWTER_CITY = true }
+        Data.maps = was
+      end
+
+      -- A name too long to sit beside its count loses whole words rather
+      -- than letters: VIRIDIAN CITY becomes VIRIDIAN, never VIRIDIAN C.
+      local _, lines = listed()
+      local shortened
+      for _, l in ipairs(lines) do
+        if l:find("^VIRIDIAN%s+%d+/%d+$") then shortened = l end
+      end
+      T.check(shortened ~= nil,
+        "the listed name drops its last word: " .. table.concat(lines, " | "))
+
+      -- The game's own map numbering, not the names: sorted by name,
+      -- ROUTE 10 comes out above ROUTE 2.
+      -- The two orders have to DISAGREE here or this proves nothing:
+      -- PEWTER sorts before VIRIDIAN by name, so give VIRIDIAN the lower
+      -- map number and the answers separate.
+      save.visited = { VIRIDIAN_CITY = true, PEWTER_CITY = true }
+      save.defeatedTrainers, save.itemsTaken = {}, {}
+      liveOw.map = { id = "CERULEAN_CITY" }
+      Data.maps.VIRIDIAN_CITY.index, Data.maps.PEWTER_CITY.index = 4, 9
+      local _, ordered = listed()
+      local seenP, seenV
+      for i, l in ipairs(ordered) do
+        if l:find("^PEWTER%s") then seenP = i end
+        if l:find("^VIRIDIAN%s") then seenV = i end
+      end
+      T.check(seenP and seenV and seenV < seenP,
+        "listed by map number, not by name -- otherwise ROUTE 10 beats ROUTE 2")
+      Data.maps.VIRIDIAN_CITY.index, Data.maps.PEWTER_CITY.index = 1, 2
+
+      save.visited = nil
+      Data.field.flyOrder = nil
+    end
+  end
+
+  Data.maps = nil
+  save.objectToggles, save.itemsTaken = {}, {}
+  save.flags, save.inventory = {}, {}
+  liveOw.map = { id = "PEWTER_CITY" }
+end
+
+-- ------- only characters this font actually has
+--
+-- The scroll hint used an up arrow, and the game's font has no such glyph.
+-- A missing one is not an error: the engine substitutes, and on the
+-- handheld it came out as a triangle pointing RIGHT -- an arrow pointing
+-- somewhere the page could not go, sitting next to the real one pointing
+-- down.  Everything a test could ask said it was fine. It drew without
+-- error, every line fitted the box, and the fixture font here is so thin
+-- that watching for missing-glyph warnings proves nothing -- it is missing
+-- most of the alphabet, and each one is only ever reported once anyway.
+--
+-- So the check is on the source: the font is built from the ROM and cannot
+-- be consulted from here, which leaves the list of exotic characters this
+-- mod is allowed to draw. The arrow below the text box is one the game
+-- draws itself; an up arrow is not.
+do
+  local f = io.open("mods/npc_bubbles/main.lua", "r")
+  T.check(f ~= nil, "the mod source is readable from the engine root")
+  if f then
+    local src = f:read("*a"); f:close()
+    local ALLOWED = { ["▼"] = true }
+    local bad = {}
+    for run_ in src:gmatch("[\194-\244][\128-\191]*") do
+      if not ALLOWED[run_] then bad[#bad + 1] = run_ end
+    end
+    T.eq(#bad, 0, "the mod draws no character the game's font lacks ("
+      .. table.concat(bad, " ") .. ")")
+  end
 end
 
 run.release()
