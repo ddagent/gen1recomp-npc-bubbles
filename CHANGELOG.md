@@ -3,6 +3,26 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.1
+
+### Added
+
+- **The checklist and the guide are drawn by whatever mod is presenting the
+  menus.** With Gen1 Modern UI installed they were the only two screens left
+  in the old style, because they are this mod's own rather than one of the
+  shapes it recognises. They now hand over a description of themselves --
+  the title, the lines, and for the guide a picture of each bubble -- and it
+  draws them in its own style. Nothing is handed over that could run, so a
+  presenter cannot be made to execute anything of ours.
+
+  Offered to any mod that can present, rather than to one by name: a fork, a
+  rename or a different UI mod is found the same way the voxel side of this
+  mod finds its arena. Without one installed, nothing changes.
+
+  The guide's descriptions are wrapped across rows rather than squeezed onto
+  one, and both screens scroll properly under a presenter -- their position
+  now follows the same buttons the native screens use.
+
 ## 2.3.0
 
 ### Added

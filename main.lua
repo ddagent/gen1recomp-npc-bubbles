@@ -2476,6 +2476,259 @@ return function(mod)
   end
 
   local CHECKLIST_SCREEN = "npc_bubbles_checklist"
+  -- ------- handing these two screens to Gen1 Modern UI
+  --
+  -- That mod redraws the game's menus in its own style, but it can only
+  -- redraw a screen it understands. The settings page is the engine's own
+  -- OptionRows shape, so it recognised that one by itself. These two are
+  -- ours, so it leaves them be and they draw the old way -- correct, but
+  -- plainly not of a piece with the panels around them.
+  --
+  -- The seam is a DESCRIPTION, never a draw callback: a title and a list of
+  -- rows, which it renders. It rejects a model containing any function, so
+  -- nothing of ours can run inside theirs.
+  --
+  -- Entirely optional. Without that mod installed `find` returns nil and
+  -- none of this happens.
+  local function bubbleImages(game)
+    -- Their rows take a picture each, but ours are crops out of one shared
+    -- sheet rather than separate images, and a row cannot carry a quad. So
+    -- each bubble is drawn once into a canvas of its own -- built here,
+    -- when a page asks for them, because love.graphics has to exist.
+    if not (love and love.graphics and love.graphics.newCanvas) then return nil end
+    local image = art(game)
+    if not (image and quads) then return nil end
+    -- the size comes from the sheet's own description rather than from the
+    -- quad: a quad is whatever the graphics layer makes it, and asking it
+    -- to measure itself is one more thing that can be missing
+    local def = game and game.data and game.data.field
+                and game.data.field.emotionBubbles
+    local boxes = def and def.bubbles
+    if type(boxes) ~= "table" then return nil end
+    local out = {}
+    for tier, index in pairs(BUBBLE) do
+      local quad, box = quads[index], boxes[index]
+      if quad and box and box.w and box.h then
+        local w, h = box.w, box.h
+        local ok, canvas = pcall(love.graphics.newCanvas, w, h)
+        if ok and canvas then
+          local prev = love.graphics.getCanvas()
+          love.graphics.setCanvas(canvas)
+          love.graphics.clear(0, 0, 0, 0)
+          love.graphics.setColor(1, 1, 1, alphaFor(tier))
+          love.graphics.draw(image, quad, 0, 0)
+          love.graphics.setColor(1, 1, 1, 1)
+          love.graphics.setCanvas(prev)
+          out[tier] = canvas
+        end
+      end
+    end
+    return out
+  end
+
+  -- Found by what it can DO, not by what it is called.
+  --
+  -- The voxel side of this mod already works this way: it reads which mod
+  -- owns the "voxel" pipeline out of the registry rather than naming
+  -- DRAMATIC_SHAPE, so a fork or a rename is still found. The same argument
+  -- holds here. Any mod publishing registerAdapter speaks this protocol,
+  -- and there is more than one UI mod about -- naming one of them would
+  -- leave the rest drawing these two screens the old way for no reason.
+  --
+  -- The loader's export table is the same one the settings page already
+  -- reads its schema and values from. mod.find needs a name, so it is only
+  -- the fallback for a build that does not expose the table.
+  local function adapterHosts()
+    local game = mod.world and mod.world.game
+    local exports = game and game.mods and game.mods.exports
+    local hosts = {}
+    if type(exports) == "table" then
+      for id, ex in pairs(exports) do
+        if id ~= mod.id and type(ex) == "table"
+           and type(ex.registerAdapter) == "function" then
+          hosts[#hosts + 1] = { id = id, register = ex.registerAdapter }
+        end
+      end
+    end
+    if #hosts == 0 and type(mod.find) == "function" then
+      local known = mod.find("gen1_modern_ui")
+      if known and known.exports
+         and type(known.exports.registerAdapter) == "function" then
+        hosts[1] = { id = known.id, register = known.exports.registerAdapter }
+      end
+    end
+    -- a fixed order, so two hosts are always approached the same way round
+    table.sort(hosts, function(a, b) return a.id < b.id end)
+    return hosts
+  end
+
+  mod.exports.adapterHosts = adapterHosts
+
+  local function adapterContract()
+
+    -- match takes the state ALONE -- pcall(screen.match, state) -- where
+    -- model and the actions take (game, state). Assuming all three agreed
+    -- cost a build: the matcher read the state as its ignored first
+    -- argument, saw nil as the second, and never matched anything, while
+    -- the registration itself reported success.
+    local function matcher(id)
+      return function(state)
+        return type(state) == "table" and state.screenId == id
+      end
+    end
+    -- Where we are in the list, in THEIR terms.
+    --
+    -- A presenter replaces the drawing, not the input: the buttons still
+    -- reach the screen's own update, which scrolls by PIXEL, while the
+    -- presented view is a list of rows. Reporting a row index that only the
+    -- action handlers moved meant nothing scrolled at all -- the handlers
+    -- are never called, because the presenter never sees the input.
+    --
+    -- So position is read off the native scroll and mapped onto the rows:
+    -- how far down our pixels are is how far down their list is. The two
+    -- lists are different lengths, which is why it is a fraction rather
+    -- than a division.
+    local function rowAt(state, rowCount)
+      if rowCount <= 1 then return 1 end
+      local max = type(state.maxScroll) == "function" and state:maxScroll() or 0
+      if max <= 0 then return 1 end
+      local frac = math.max(0, math.min(1, (state.scroll or 0) / max))
+      return 1 + math.floor(frac * (rowCount - 1) + 0.5)
+    end
+    local function actions(dir)
+      return function(_, state)
+        if type(state) ~= "table" then return false end
+        if dir == "back" then
+          if state.game and state.game.stack then state.game.stack:pop() end
+          return true
+        end
+        -- moves the same scroll the buttons do, so whichever route the
+        -- presenter uses, the two agree on where we are
+        local max = type(state.maxScroll) == "function" and state:maxScroll() or 0
+        local step = (dir == "up" and -1 or 1) * G_ROW
+        state.scroll = math.max(0, math.min(max, (state.scroll or 0) + step))
+        return true
+      end
+    end
+
+    -- Wrapped, not squeezed onto one line.
+    --
+    -- Their panel is sized to the longest label and then the row's picture
+    -- takes width the sizing did not allow for, so whichever row is longest
+    -- loses its tail to an ellipsis. Shortening the text only shrinks the
+    -- panel and drags the next row over the same edge -- the wording cannot
+    -- win that argument.
+    --
+    -- So no row is long. Each description is wrapped, the picture rides on
+    -- its first line, and the rest follow as plain rows: the longest label
+    -- then belongs to a row with no picture, which is measured correctly.
+    -- The line carrying the picture is wrapped SHORTER than the rest.
+    --
+    -- Their panel is sized to the longest label, and a row's picture then
+    -- takes width the sizing did not allow for -- so the longest label
+    -- loses its tail, but only if it is a row with a picture. Keeping the
+    -- picture rows well inside the others means the longest label always
+    -- belongs to a plain row, which is measured correctly.
+    local WRAP, WRAP_WITH_PICTURE = 22, 15
+    local function wrapAround(text)
+      local words, lines, line = {}, {}, nil
+      for word in tostring(text):gmatch("[^ ]+") do words[#words + 1] = word end
+      for _, word in ipairs(words) do
+        local room = (#lines == 0) and WRAP_WITH_PICTURE or WRAP
+        if not line then
+          line = word
+        elseif #line + 1 + #word <= room then
+          line = line .. " " .. word
+        else
+          lines[#lines + 1] = line
+          line = word
+        end
+      end
+      if line then lines[#lines + 1] = line end
+      return lines
+    end
+
+    local function describedRows(state, pics)
+      local rows = {}
+      for _, entry in ipairs(state.entries or {}) do
+        local text = table.concat(entry.lines or {}, " ")
+        local first = true
+        for _, line in ipairs(wrapAround(text)) do
+          rows[#rows + 1] = {
+            label = line,
+            image = first and pics and entry.tier and pics[entry.tier] or nil,
+          }
+          first = false
+        end
+      end
+      -- no blank row between entries: the picture at the start of a line is
+      -- already what says a new one has begun
+      return rows
+    end
+
+    return {
+      apiVersion = 1,
+      owner = mod.id,
+      screens = {
+        NpcBubblesChecklist = {
+          match = matcher("NpcBubblesChecklist"),
+          canSuppressNative = true,
+          model = function(_, state)
+            local rows = {}
+            for _, entry in ipairs(state.entries or {}) do
+              for _, line in ipairs(entry.lines or {}) do
+                -- a blank line is the gap between the place you are in and
+                -- everywhere else; keep it as a spacer rather than a row
+                rows[#rows + 1] = { label = line, enabled = line ~= "" }
+              end
+            end
+            local at = rowAt(state, #rows)
+            return { title = state.title or "CHECKLIST", rows = rows,
+                     index = at, scroll = math.max(0, at - 1),
+                     footer = { "B BACK" } }
+          end,
+          actions = { up = actions("up"), down = actions("down"),
+                      back = actions("back") },
+        },
+        NpcBubblesGuide = {
+          match = matcher("NpcBubblesGuide"),
+          canSuppressNative = true,
+          model = function(game, state)
+            local rows = describedRows(state, bubbleImages(game))
+            local at = rowAt(state, #rows)
+            return { title = state.title or "NPC BUBBLES", rows = rows,
+                     index = at, scroll = math.max(0, at - 1),
+                     footer = { "B BACK" } }
+          end,
+          actions = { up = actions("up"), down = actions("down"),
+                      back = actions("back") },
+        },
+      },
+    }
+  end
+
+  local registered = {}
+  local function offerScreensToPresenters()
+    local contract = adapterContract()
+    local taken = 0
+    for _, host in ipairs(adapterHosts()) do
+      if not registered[host.id] then
+        local ok, err = pcall(host.register, contract)
+        if ok and err ~= false then
+          registered[host.id] = true
+          taken = taken + 1
+          mod.log:info("%s will present the checklist and the guide", host.id)
+        else
+          mod.log:warn("%s refused the adapter: %s", host.id, tostring(err))
+        end
+      end
+    end
+    return taken
+  end
+
+  -- once everything is loaded, so the other mods' exports exist
+  mod.events:on("game.ready", function() pcall(offerScreensToPresenters) end)
+
   mod.content.screens:register(GUIDE_SCREEN,
     { new = function(game) return Guide.new(game, "guide") end })
   mod.content.screens:register(CHECKLIST_SCREEN,

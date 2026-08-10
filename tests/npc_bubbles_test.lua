@@ -2022,6 +2022,140 @@ do
   liveOw.map = { id = "PEWTER_CITY" }
 end
 
+-- ------- handing the two screens to whatever can present them
+--
+-- Found by what a mod can DO, not by what it is called. The voxel side of
+-- this mod already works that way -- it reads which mod owns the "voxel"
+-- pipeline rather than naming DRAMATIC_SHAPE -- and there is more than one
+-- UI mod about, so naming one would leave the rest drawing these screens
+-- the old way for no reason.
+do
+  local loader = run.loader
+  local game = loader.game
+  game.mods = loader
+  loader.exports = loader.exports or {}
+
+  local offered = {}
+  local function presenter(name)
+    return { registerAdapter = function(contract)
+      offered[name] = contract
+      return true
+    end }
+  end
+  loader.exports.gen1_modern_ui = presenter("gen1_modern_ui")
+  loader.exports.some_other_ui  = presenter("some_other_ui")
+  -- a mod that cannot present anything must not be approached
+  loader.exports.unrelated_mod  = { somethingElse = function() end }
+
+  run.loader.events:emit("game.ready", {})
+
+  T.check(offered.gen1_modern_ui ~= nil, "the known presenter is offered them")
+  T.check(offered.some_other_ui ~= nil,
+    "and so is any other mod that can present -- a fork, a rename, a rival")
+  -- Asked of the list itself, not of who answered: approaching a mod that
+  -- cannot present fails harmlessly, so "nobody heard from it" is true
+  -- whether it was approached or not, and proves nothing on its own.
+  local hosts = {}
+  for _, h in ipairs(run.loader.exports.npc_bubbles.adapterHosts()) do
+    hosts[#hosts + 1] = h.id
+  end
+  table.sort(hosts)
+  T.eq(table.concat(hosts, ","), "gen1_modern_ui,some_other_ui",
+    "only the mods that can present are approached: " .. table.concat(hosts, ","))
+  T.eq(offered.unrelated_mod, nil, "so a mod that cannot present hears nothing")
+
+  local contract = offered.gen1_modern_ui
+  if type(contract) == "table" then
+    T.eq(contract.apiVersion, 1, "the contract states the version it speaks")
+    T.check(type(contract.screens) == "table", "and describes screens")
+    for _, id in ipairs({ "NpcBubblesChecklist", "NpcBubblesGuide" }) do
+      local screen = contract.screens[id]
+      T.check(type(screen) == "table", id .. " is offered")
+      if type(screen) == "table" then
+        T.eq(type(screen.match), "function", id .. " can be recognised")
+        T.eq(type(screen.model), "function", id .. " can be described")
+        T.eq(screen.draw, nil, id .. " hands over no drawing code")
+      end
+    end
+
+    -- the description is DATA. Their side rejects a model holding any
+    -- function, so nothing of ours can run inside theirs.
+    local page = Data.screens.npc_bubbles_checklist
+    page = type(page) == "table" and page.new or page
+    local built = page(game)
+    local model = contract.screens.NpcBubblesChecklist.model(game, built)
+    T.check(type(model) == "table" and type(model.rows) == "table",
+      "the checklist describes itself as rows")
+    local function holdsFunction(v, depth)
+      if type(v) == "function" then return true end
+      if type(v) ~= "table" or (depth or 0) > 4 then return false end
+      for _, item in pairs(v) do
+        if holdsFunction(item, (depth or 0) + 1) then return true end
+      end
+      return false
+    end
+    T.check(not holdsFunction(model),
+      "and carries no callbacks, which their side would refuse")
+    -- Called the way THEY call it -- pcall(screen.match, state), the state
+    -- alone. Calling it as match(game, state) here is what let a matcher
+    -- that could never fire pass its own test.
+    T.check(contract.screens.NpcBubblesChecklist.match(built),
+      "and recognises its own screen, given the state on its own")
+    T.check(not contract.screens.NpcBubblesGuide.match(built),
+      "without claiming the other one")
+    T.check(not contract.screens.NpcBubblesChecklist.match(nil),
+      "and does not fall over when handed nothing")
+
+    -- The guide's descriptions are WRAPPED across rows, and the row that
+    -- carries a picture is wrapped shorter than the rest.
+    --
+    -- A presenter sizes its panel to the longest label and then draws the
+    -- picture in width the sizing did not allow for, so the longest label
+    -- loses its tail -- but only when that row has a picture. Squeezing a
+    -- description onto one line cannot be fixed by shortening the wording:
+    -- the shorter text just shrinks the panel and cuts the next row down.
+    local guide = Data.screens.npc_bubbles_guide
+    guide = type(guide) == "table" and guide.new or guide
+    local guidePage = guide(game)
+    local guideModel = contract.screens.NpcBubblesGuide.model(game, guidePage)
+    local longestPlain, longestWithPicture = 0, 0
+    for _, row in ipairs(guideModel.rows) do
+      local width = #tostring(row.label or "")
+      if row.image then
+        longestWithPicture = math.max(longestWithPicture, width)
+      else
+        longestPlain = math.max(longestPlain, width)
+      end
+    end
+    T.check(#guideModel.rows > 4,
+      "each description spans several rows rather than one long line")
+    T.check(longestWithPicture < longestPlain,
+      ("a row with a picture is never the longest label (%d vs %d)")
+        :format(longestWithPicture, longestPlain))
+
+    -- A presenter replaces the DRAWING, not the input: the buttons still
+    -- reach the screen's own update, which scrolls by pixel. So the row the
+    -- model reports has to be read off that scroll, or the presented list
+    -- never moves however far you press down.
+    local describe = contract.screens.NpcBubblesGuide.model
+    guidePage.scroll = 0
+    T.eq(describe(game, guidePage).index, 1, "at the top, the first row")
+    local rowCount = #describe(game, guidePage).rows
+    guidePage.scroll = guidePage:maxScroll()
+    T.eq(describe(game, guidePage).index, rowCount,
+      "scrolled to the bottom, the last row -- the whole list is reachable")
+    guidePage.scroll = math.floor(guidePage:maxScroll() / 2)
+    local middle = describe(game, guidePage).index
+    T.check(middle > 1 and middle < rowCount,
+      "and part way down lands part way through (" .. middle .. ")")
+    guidePage.scroll = 0
+  end
+
+  loader.exports.gen1_modern_ui = nil
+  loader.exports.some_other_ui = nil
+  loader.exports.unrelated_mod = nil
+end
+
 -- ------- never run somebody else's code
 --
 -- Working out what an NPC has for you means RUNNING their talk script. That
