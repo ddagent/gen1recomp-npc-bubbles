@@ -979,6 +979,16 @@ do
       end
       -- it is the engine's own row renderer, so this is mostly a check that
       -- every row hands it what it asks for: a label and a value function
+      -- Gen1 Modern UI adopts a screen built on the engine's OptionRows
+      -- helper if it carries a screen id alongside the rows, cursor, update
+      -- and draw. Everything but the id was already here.
+      T.eq(type(page.screenId), "string", "the page names itself")
+      T.check(page.screenId:match("Settings$") or page.screenId:match("Options$"),
+        "with an id another mod's presenter will recognise: " .. page.screenId)
+      T.check(type(page.rows) == "table" and type(page.index) == "number"
+        and type(page.update) == "function" and type(page.draw) == "function",
+        "and the rest of the shape it looks for")
+
       T.check(pcall(page.draw, page), "the page draws")
       page.index = #page.rows + 1          -- BACK, one past the last row
       T.check(pcall(page.draw, page), "and draws with BACK selected")
@@ -2010,6 +2020,81 @@ do
   save.objectToggles, save.itemsTaken = {}, {}
   save.flags, save.inventory = {}, {}
   liveOw.map = { id = "PEWTER_CITY" }
+end
+
+-- ------- never run somebody else's code
+--
+-- Working out what an NPC has for you means RUNNING their talk script. That
+-- is safe for the base game, whose scripts are handed a `game` and touch
+-- only what they are given -- the sandbox swaps the save, swallows pushes
+-- and captures rows instead of playing them.
+--
+-- It is not safe for a script another mod wrote. The mod API hands each mod
+-- a `mod.world` bound to the LIVE game, so a script written against it never
+-- touches the game we pass in: warpTo starts a real warp, removeNpc takes
+-- somebody off the real map. KANTO ASCENDANT's PALLET boat does both, and
+-- probing it hid the sailor and sailed the player to the outpost -- four
+-- times over from one map entry, because the probe answers yes to every
+-- question and runs several times per NPC.
+--
+-- A row list is data and stays readable whoever wrote it. A closure is code.
+do
+  local MapScripts = require("src.script.MapScripts")
+  local CoreData = require("src.core.Data")
+  local live = { warps = 0, removed = false }
+  local ranRows = false
+
+  CoreData.map_scripts = CoreData.map_scripts or {}
+  local chain = { { priority = 2400, talk = {
+    -- somebody else's closure, reaching past the game it was handed
+    BOAT = function()
+      live.removed = true                  -- mod.world:removeNpc(id)
+      live.warps = live.warps + 1          -- mod.world:warpTo(...)
+    end,
+    -- and somebody else's ROWS, which are only ever read
+    ROWS = { { "give_item", "POTION" } },
+  } } }
+  chain.owners = { { modId = "kanto_ascendant" } }
+  CoreData.map_scripts.VIRIDIAN_CITY = chain
+  MapScripts.invalidate("VIRIDIAN_CITY")
+
+  T.eq((MapScripts.talkSource("VIRIDIAN_CITY", "BOAT") or {}).modId,
+    "kanto_ascendant", "the engine reports whose script it is")
+
+  local boat = { id = "boat", px = 0, py = 0, cellX = 1, cellY = 1,
+                 def = { text = "BOAT", name = "PALLETTOWN_BOAT", index = 1 } }
+  function boat:facePlayer() end
+  local rows = { id = "rows", px = 0, py = 0, cellX = 2, cellY = 2,
+                 def = { text = "ROWS", name = "ROWS_NPC", index = 2 } }
+  function rows:facePlayer() end
+
+  liveOw.map = { id = "VIRIDIAN_CITY" }
+  liveOw.npcs = { boat, rows }
+  liveOw.player = { inputLocked = false, cellX = 5, cellY = 5,
+                    px = 80, py = 80, facing = "down" }
+  liveOw.runner = { isRunning = function() return false end }
+  run.loader.game.stack.top = function() return liveOw end
+  run.loader.events:emit("map.entered", { map = "VIRIDIAN_CITY" })
+  local tiers = run.loader.exports.npc_bubbles.tiers()
+
+  T.eq(live.warps, 0, "classifying does not run another mod's closure")
+  T.eq(live.removed, false, "so it cannot take their NPC off the map")
+  T.eq(tiers.boat, 3, "they get the smile, like any script we cannot read")
+  T.eq(tiers.rows, 1,
+    "but a mod's ROW list is still read: it is data, and nothing runs")
+
+  -- the other way in: talking to them, which asks again for their wording
+  run.loader.modOptions.npc_bubbles = { heard = true }
+  run.loader.events:emit("world.interacted",
+    { mapId = "VIRIDIAN_CITY", kind = "npc", target = boat })
+  pcall(run.loader.exports.npc_bubbles.drawFor, boat, 0, 0)
+  T.eq(live.warps, 0, "and neither does talking to them")
+  T.eq(live.removed, false, "still on the map")
+
+  run.loader.modOptions.npc_bubbles = {}
+  CoreData.map_scripts.VIRIDIAN_CITY = nil
+  MapScripts.invalidate("VIRIDIAN_CITY")
+  liveOw.npcs = {}
 end
 
 -- ------- only characters this font actually has

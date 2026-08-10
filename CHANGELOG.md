@@ -50,6 +50,28 @@ Version headings match `manifest.json`'s `version`.
   like the ROUTE 23 guards becomes a task only once you hold the badges -- it
   never shrinks, so finishing something can never send the score backwards.
 
+### Fixed
+
+- **Another mod's NPCs are no longer set off by looking at them.** Working
+  out what somebody has for you means running their talk script, which is
+  safe for the base game -- the script is handed a stand-in save and a
+  stand-in world, and nothing it does escapes them. A script another mod
+  wrote does not use either: the mod API gives it a direct handle on the
+  live game, so anything it does happens for real.
+
+  With KANTO ASCENDANT installed that meant the sailor in PALLET TOWN
+  vanished and the boat sailed on its own -- four times over from a single
+  step onto the map, since the marker is worked out several times per person
+  and answers yes to any question it is asked.
+
+  Their scripts are now left alone rather than run. Where a mod writes its
+  NPCs as instruction lists they are read exactly as before and still get a
+  proper marker; where it writes them as code, that person falls back to the
+  smile. Nothing in the base game changed.
+
+- **Fits in with Gen1 Modern UI.** Its presenter adopts settings pages built
+  the standard way, and now recognises this one.
+
 ### Changed
 
 - The rule deciding what each bubble is worth now lives in one place

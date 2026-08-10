@@ -108,6 +108,10 @@ score forwards.
 - **"Later" can mean much later.** Some gifts are behind badges you will not
   have for hours, so a faded `!` may sit there a long time. Turn
   `LATER BUBBLE` off if that bothers you.
+- **Mods that add their own people.** Where another mod writes its NPCs as
+  instruction lists they get markers like anyone else. Where it writes them
+  as code, they fall back to the smile — working out what they hold would
+  mean running their script, and that is theirs to run, not ours.
 - Works on Red, Blue and Yellow.
 
 ## Install

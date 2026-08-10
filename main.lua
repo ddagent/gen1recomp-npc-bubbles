@@ -943,6 +943,38 @@ return function(mod)
     return observedGift(prog, game, npc, not safe.__permissive and realOw or nil)
   end
 
+  -- Whose script is this, and is it safe for us to run?
+  --
+  -- Working out what somebody has for you means RUNNING their talk script,
+  -- in a sandbox: a copy of the save, a stack that swallows pushes, a
+  -- runner that captures rows instead of playing them. That holds for the
+  -- base game, whose scripts are handed a `game` and touch only what they
+  -- are given.
+  --
+  -- It does not hold for a script another mod wrote. The mod API hands each
+  -- mod a `mod.world` bound to the LIVE game, so a script written against
+  -- it never touches the game we pass in -- WorldAPI:warpTo starts a real
+  -- warp, WorldAPI:removeNpc takes somebody off the real map. Substituting
+  -- a save cannot reach a handle somebody else is holding. KANTO ASCENDANT's
+  -- PALLET boat does both: probing it hid the sailor and sailed the player
+  -- to the outpost, four times over from one map entry, because the probe
+  -- answers yes to every question and runs several times per NPC.
+  --
+  -- The line is not who wrote it but what it is. A row list is DATA -- we
+  -- walk it and read flags, and nothing runs, whoever it came from. A
+  -- closure is CODE. So a mod's rows are read as they always were, and a
+  -- mod's closure is never called: it falls back to the smile, exactly like
+  -- a script we cannot read.
+  local function safeToRun(mapId, textConst, entry)
+    if type(entry) ~= "function" then return true end   -- rows are data
+    if not (mapId and textConst) then return false end
+    local ok, source = pcall(MapScripts.talkSource, mapId, textConst)
+    -- a source carrying a modId is somebody else's code; the base game
+    -- reports none
+    if ok and type(source) == "table" and source.modId then return false end
+    return true
+  end
+
   -- One place decides what tier somebody is.
   --
   -- Two callers ask that question.  rebuild asks it of the NPCs standing in
@@ -984,6 +1016,10 @@ return function(mod)
     -- -- and their scripts cannot say so either, since the rewards are paid
     -- from the victories table rather than from any row.
     if victoryReward(npc.def, game) then return 1 end
+    -- somebody else's code: mark them and leave it unread
+    if not safeToRun(mapId, npc.def and npc.def.text, entry) then
+      return 3
+    end
     local prog = programFor(entry, game, npc, ow)
     if prog then
       local tier = classify(prog, game, entry)
@@ -1029,7 +1065,8 @@ return function(mod)
 
   -- The same for a sign, which has no NPC and no closures worth probing:
   -- only a gift counts.  See the sign note in rebuild.
-  local function signTierFor(entry, game, ow)
+  local function signTierFor(entry, game, ow, mapId, textConst)
+    if not safeToRun(mapId, textConst, entry) then return nil end
     local prog = programFor(entry, game, nil, ow)
     local tier = prog and classify(prog, game, entry) or nil
     return tier == 1 and 1 or nil
@@ -1055,7 +1092,7 @@ return function(mod)
     for _, sign in ipairs((map.def and map.def.signs) or {}) do
       local entry = sign.text and talk[sign.text]
       if entry ~= nil then
-        local tier = signTierFor(entry, game, ow)
+        local tier = signTierFor(entry, game, ow, map.id, sign.text)
         if tier then signTiers[sign.x .. "," .. sign.y] = tier end
       end
     end
@@ -1113,6 +1150,9 @@ return function(mod)
     local view = MapScripts.get(map.id)
     local entry = view and view.talk and view.talk[npc.def.text]
     if entry == nil then return end
+    -- and not on the way past, either: talking to a mod's NPC would run
+    -- their script again here, three times over, looking for variety
+    if not safeToRun(map.id, npc.def.text, entry) then return end
     local ok, said = pcall(saidNow, entry, game, npc, ow)
     if not (ok and type(said) == "string" and said ~= "") then return end
 
@@ -1162,6 +1202,10 @@ return function(mod)
   -- spoken to costs nothing -- for a closure this would otherwise mean a
   -- third probe run on every rebuild.
   function alreadyHeard(mapId, npc, entry, game, ow)
+    -- never run somebody else's closure to find out what it says
+    if not safeToRun(mapId, npc and npc.def and npc.def.text, entry) then
+      return false
+    end
     local roll = mod.save and mod.save:get("heard")
     if type(roll) ~= "table" then return false end
     local key = heardKey(mapId, npc)
@@ -1949,9 +1993,11 @@ return function(mod)
           for _, sign in ipairs(def.signs or {}) do
             local entry = sign.text and talk[sign.text]
             if entry ~= nil then
-              local ok, base = pcall(signTierFor, entry, fresh, freshOw)
+              local ok, base = pcall(signTierFor, entry, fresh, freshOw,
+                                   mapId, sign.text)
               tracked[#tracked + 1] = { mapId = mapId, entry = entry,
-                                        sign = true, base = ok and base or nil }
+                                        sign = true, signText = sign.text,
+                                        base = ok and base or nil }
             end
           end
         end
@@ -1996,7 +2042,8 @@ return function(mod)
       worlds[item.mapId] = realOw
       local outstanding, skip = false, false
       if item.sign then
-        local ok, now = pcall(signTierFor, item.entry, game, realOw)
+        local ok, now = pcall(signTierFor, item.entry, game, realOw,
+                              item.mapId, item.signText)
         outstanding = ok and now ~= nil
       else
         local state = presence(item, realOw)
@@ -2322,6 +2369,11 @@ return function(mod)
   -- over every map in the game first.
   function Guide.new(game, kind)
     local self = setmetatable({ game = game, scroll = 0 }, Guide)
+    -- named for the same reason the settings page is, though these two draw
+    -- themselves rather than through OptionRows, so Modern UI would need an
+    -- adapter registered before it could present them
+    self.screenId = kind == "checklist" and "NpcBubblesChecklist"
+                    or "NpcBubblesGuide"
     self.title = kind == "checklist" and "CHECKLIST" or "NPC BUBBLES"
     -- laid out once: each entry is its bubble and however many lines its
     -- description wraps to
@@ -2551,6 +2603,13 @@ return function(mod)
 
   function Settings.new(game)
     return setmetatable({ game = game, index = 1, scroll = 0,
+                          -- Gen1 Modern UI adopts any screen built on the
+                          -- engine's OptionRows helper, which this is. It
+                          -- looks for a screenId ending in Options or
+                          -- Settings alongside the rows, cursor, update and
+                          -- draw it already has. An inert string when that
+                          -- mod is not installed, so nothing depends on it.
+                          screenId = "NpcBubblesSettings",
                           rows = settingsRows(game) }, Settings)
   end
 
