@@ -3,6 +3,15 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.9
+
+### Fixed
+
+- **CINNABAR ISLAND reads as one line under Gen1 Modern UI.** Its name is the
+  one place name too long for our own box, and the two halves were reaching
+  that mod as two rows, with the count landing against the tail of the name
+  instead of the whole of it.
+
 ## 2.3.8
 
 ### Changed

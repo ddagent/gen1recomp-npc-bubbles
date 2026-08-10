@@ -2440,13 +2440,13 @@ return function(mod)
     local function putTally(name, done, total)
       local rows = tallyLines(name, done, total, GUIDE_COLS)
       for i, line in ipairs(rows) do
-        put(line, i == #rows and "tally" or nil)
+        put(line, i == #rows and "tally" or i > 1 and "cont" or nil)
       end
     end
     if score.place then
       put("")
-      for _, line in ipairs(wrapWords(score.place, GUIDE_COLS)) do
-        put(line, "head")
+      for i, line in ipairs(wrapWords(score.place, GUIDE_COLS)) do
+        put(line, i == 1 and "head" or "cont")
       end
       put(underline(GUIDE_COLS), "rule")
       -- one line per building, under the rule, so they plainly belong to
@@ -2805,7 +2805,7 @@ return function(mod)
                 local mark, last = marks[i], rows[#rows]
                 if mark == "rule" then
                   -- their heading draws it
-                elseif mark == "head" and last and last.header then
+                elseif mark == "cont" and last then
                   last.label = last.label .. " " .. line   -- a wrapped name
                 elseif mark == "tally" and last then
                   last.value = line

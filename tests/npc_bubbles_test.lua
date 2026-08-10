@@ -2407,7 +2407,8 @@ do
                     { "show_text", "nothing more" } }
     local MapScripts = require("src.script.MapScripts")
     local save = run.loader.game.save
-    for _, id in ipairs({ "PEWTER_CITY", "PEWTER_GYM", "VIRIDIAN_CITY" }) do
+    for _, id in ipairs({ "PEWTER_CITY", "PEWTER_GYM", "VIRIDIAN_CITY",
+                          "CINNABAR_ISLAND" }) do
       MapScripts.attachBase(id, { talk = { GIVER = GIVER } })
       MapScripts.invalidate(id)
     end
@@ -2422,8 +2423,13 @@ do
                         objects = { giver("G_GIVER") } },
       VIRIDIAN_CITY = { tileset = "OVERWORLD", index = 1, signs = {},
                         warps = {}, objects = { giver("V_GIVER") } },
+      -- fifteen characters against a fourteen-wide box: the one real place
+      -- name that wraps, and the shape every fixture here was missing
+      CINNABAR_ISLAND = { tileset = "OVERWORLD", index = 4, signs = {},
+                          warps = {}, objects = { giver("C_GIVER") } },
     }
-    save.visited = { PEWTER_CITY = true, VIRIDIAN_CITY = true }
+    save.visited = { PEWTER_CITY = true, VIRIDIAN_CITY = true,
+                     CINNABAR_ISLAND = true }
     save.flags, save.inventory = {}, {}
     save.defeatedTrainers, save.itemsTaken = {}, {}
     liveOw.map = { id = "PEWTER_CITY" }
@@ -2489,6 +2495,23 @@ do
       "both groups -- the place you are in, and everywhere else -- are "
       .. "offered as headings of theirs")
     T.eq(valued, tallies, "and every count reaches their value column")
+
+    -- ...on the row it belongs to. A name too long for our box is two
+    -- lines to us and must still be one row to them, or the count lands
+    -- against the tail of the name instead of the whole of it.
+    local whole
+    for _, row in ipairs(model.rows) do
+      if tostring(row.label) == "CINNABAR ISLAND" then whole = row end
+    end
+    T.check(whole ~= nil,
+      "a name that wraps for us is still one row for them: "
+      .. table.concat((function()
+           local ls = {}
+           for _, r in ipairs(model.rows) do ls[#ls + 1] = tostring(r.label) end
+           return ls
+         end)(), " | "))
+    T.check(whole and whole.value,
+      "and its count is on that row, not on the tail of its own name")
 
     -- The guide's descriptions are WRAPPED across rows, and the row that
     -- carries a picture is wrapped shorter than the rest.

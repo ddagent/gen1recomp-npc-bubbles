@@ -123,6 +123,13 @@ MUTATIONS = [
     ("the place you are in is not offered as a heading of theirs",
      '''                                      header = mark == "head" or nil }''',
      '''                                      header = nil }'''),
+    ("a name too long for our box stays broken in two in theirs",
+     '''                elseif mark == "cont" and last then
+                  last.label = last.label .. " " .. line   -- a wrapped name
+''', ''),
+    ("only the heading is put back together, not every wrapped name",
+     '''        put(line, i == #rows and "tally" or i > 1 and "cont" or nil)''',
+     '''        put(line, i == #rows and "tally" or nil)'''),
     ("a count is a row of its own in their list too",
      '''                elseif mark == "tally" and last then
                   last.value = line
