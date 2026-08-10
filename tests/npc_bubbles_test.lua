@@ -2006,6 +2006,31 @@ do
     T.check(counted.A_TRADER, "a trade is counted -- its receipt is its own row")
     T.check(counted.A_EXHIBIT, "and an exhibit is, because the dex records it")
 
+    -- A SIGN is judged the same way as a person, and it has to be handed
+    -- its program to be judged at all. The CELADON MART roof machines sell
+    -- you a drink and record nothing, and they stayed on the tally because
+    -- the sign's program was never carried through to the rule -- the tier
+    -- arrived, the reasoning behind it did not.
+    Data.maps = {
+      VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {}, index = 1,
+        objects = {},
+        signs = { { text = "VENDING", x = 1, y = 1 },
+                  { text = "PLACARD", x = 2, y = 2 } } },
+    }
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+      VENDING = { { "give_item", "FRESH_WATER" } },
+      PLACARD = { { "mark_seen", "SNORLAX" } },
+    } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    save.pokedex = { owned = {}, seen = {} }
+    local signs = {}
+    for _, item in ipairs(count().tasks or {}) do
+      if item.sign then signs[item.signText] = true end
+    end
+    T.check(signs.PLACARD, "a placard the dex records is counted")
+    T.check(not signs.VENDING,
+      "a machine that sells you a drink and records nothing is not")
+
     -- and she keeps her bubble in the world either way: knowing MOM will
     -- heal you is the whole point of the marker
     liveOw.npcs = { { id = "mum", px = 0, py = 0, cellX = 0, cellY = 0,

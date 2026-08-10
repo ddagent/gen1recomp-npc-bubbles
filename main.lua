@@ -2027,11 +2027,12 @@ return function(mod)
           for _, sign in ipairs(def.signs or {}) do
             local entry = sign.text and talk[sign.text]
             if entry ~= nil then
-              local ok, base = pcall(signTierFor, entry, fresh, freshOw,
-                                   mapId, sign.text)
+              local ok, base, prog = pcall(signTierFor, entry, fresh, freshOw,
+                                           mapId, sign.text)
               tracked[#tracked + 1] = { mapId = mapId, entry = entry,
                                         sign = true, signText = sign.text,
-                                        base = ok and base or nil }
+                                        base = ok and base or nil,
+                                        prog = ok and prog or nil }
             end
           end
         end

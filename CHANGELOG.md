@@ -3,6 +3,16 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.3
+
+### Fixed
+
+- **The CELADON MART roof machines have left the checklist.** They sell you
+  a drink and record nothing, so like MOM they could never be crossed off
+  -- but a sign was being judged without being handed the reasoning behind
+  its own marker, so the rule that should have caught them never saw them.
+  They keep their `!`.
+
 ## 2.3.2
 
 ### Fixed
