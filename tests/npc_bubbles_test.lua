@@ -23,6 +23,30 @@ Data.field.emotionBubbles = {
               { x = 32, y = 0, w = 16, h = 16 } },
 }
 
+-- ------- a block that asserts nothing has not passed, it has not run
+--
+-- Several checks in this file have gone quiet at one time or another and
+-- taken the whole block with them: a loop over a variable that was not in
+-- scope, an `if` whose guard was never true, a value read from a cache
+-- instead of being recomputed. Every one of them left the suite green and
+-- the total looking healthy, because a check that never runs cannot fail.
+--
+-- `block` wraps a chunk of the file and refuses to let it contribute
+-- nothing. It is the cheapest guard here: it catches silence, which is the
+-- failure mode a test file cannot otherwise report.
+-- the counter lives on the shared harness; the modkit table re-exports the
+-- assertions but not the tally
+local H = T.harness
+local function block(label, fn)
+  local before = H.checks
+  fn()
+  local ran = H.checks - before
+  if ran == 0 then
+    T.check(false, "block '" .. label .. "' ran no checks at all")
+  end
+  return ran
+end
+
 local run = T.sdk.loadMod("mods/npc_bubbles", { data = Data })
 T.eq(#run.errors, 0, "loads clean (" .. tostring(run.errors[1]) .. ")")
 
@@ -1787,6 +1811,25 @@ do
                          warps = { { destMap = "LAST_MAP" } } },
       VIRIDIAN_GYM  = { tileset = "GYM", warps = { { destMap = "LAST_MAP" } } },
     }
+    -- Two towns with a door straight between them stay two places.
+    --
+    -- Every outdoor map is claimed as its own place before the walk spreads
+    -- anywhere, and that seeding is the whole rule -- the `not isOutdoor`
+    -- test inside the spread can never fire, because a seeded map already
+    -- has its place. Without the seeding the second town is swallowed by
+    -- the first, and the fixtures above cannot show it: their towns are
+    -- joined through a tunnel, where the fallback happens to rebuild the
+    -- same grouping and the rule looks tested when it is not.
+    local neighbours = {
+      A_TOWN = { tileset = "OVERWORLD", warps = { { destMap = "B_TOWN" } } },
+      B_TOWN = { tileset = "OVERWORLD", warps = { { destMap = "A_TOWN" } } },
+    }
+    local aPlace, aName = E.placeAround("A_TOWN", neighbours)
+    T.eq(aName, "A_TOWN", "a town is its own place")
+    T.eq(aPlace.B_TOWN, nil, "and does not swallow the town next door")
+    T.eq(select(2, E.placeAround("B_TOWN", neighbours)), "B_TOWN",
+      "which holds from either side")
+
     -- ROUTE 23 and INDIGO PLATEAU are PLATEAU-tileset, which the engine
     -- does not call outdoor. Left that way they are swallowed by whatever
     -- town has a door onto them, instead of being places in their own
@@ -1888,7 +1931,140 @@ do
       T.check(pcall(list.draw, list), "and it draws")
     end
 
-    -- ------- everywhere else you have been
+    -- ------- the kept half of the count has to let go again
+  --
+  -- Classifying every NPC against a save with the progress stripped out
+  -- gives the same answer every time, so it is worked out once and kept.
+  -- A cache that never CLEARS is the other half of that bargain, and it
+  -- fails silently: load a different save and the checklist would go on
+  -- reporting the last one's score with nothing on screen to say so.
+  --
+  -- The handler that clears it is wired hundreds of lines above where it is
+  -- defined, which is exactly the shape that has already been a nil in this
+  -- file once. Nothing tested it until now.
+  block("the baseline cache holds and clears", function()
+    local builds = run.loader.exports.npc_bubbles.baselineBuilds
+    T.check(type(builds) == "function", "the build count is readable")
+    if type(builds) ~= "function" then return end
+
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = { GIVER = GIVER } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    Data.maps = { VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {}, signs = {},
+                                    index = 1, objects = { obj("A_GIVER", "GIVER") } } }
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    save.flags, save.visited = {}, {}
+    save.defeatedTrainers, save.itemsTaken, save.objectToggles = {}, {}, {}
+
+    count()
+    local first = builds()
+    count(); count()
+    T.eq(builds(), first, "asking again does not work it out again")
+
+    run.loader.events:emit("save.loaded", {})
+    count()
+    T.eq(builds(), first + 1, "and loading a save makes it start over")
+  end)
+
+  -- ------- what can actually be finished
+  --
+  -- MOM heals your party and writes nothing down, so she offers it again
+  -- for ever. That is a real "!" worth having over her head -- but it is
+  -- never a job that can be crossed off, and counting it means the
+  -- checklist can never be finished. The player found her stuck at 1/4 in
+  -- PALLET TOWN with no way to move it.
+  do
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+      GIVER   = GIVER,
+      HEALER  = { { "heal_party" } },
+      TRADER  = { { "trade", 1, "EVENT_TRADED_IT" } },
+      EXHIBIT = { { "mark_seen", "SNORLAX" } },
+    } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    Data.maps = {
+      VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {}, signs = {}, index = 1,
+                        objects = { obj("A_GIVER", "GIVER"),
+                                    obj("A_HEALER", "HEALER"),
+                                    obj("A_TRADER", "TRADER"),
+                                    obj("A_EXHIBIT", "EXHIBIT") } },
+    }
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    save.flags, save.visited = {}, {}
+    save.defeatedTrainers, save.itemsTaken, save.objectToggles = {}, {}, {}
+
+    local counted = {}
+    for _, item in ipairs(count().tasks or {}) do
+      counted[item.npc and item.npc.def.name or "sign"] = true
+    end
+    T.check(counted.A_GIVER, "a gift that sets a flag is counted")
+    T.check(not counted.A_HEALER,
+      "a heal that records nothing is NOT -- it can never be finished")
+
+    -- ...but the refinement that keeps this from being over-broad. A trade
+    -- carries its receipt in the third slot of its row and an exhibit is
+    -- recorded in the POKeDEX; looking only for set_flag would throw out
+    -- all six in-game trades and the SS ANNE SNORLAX along with MOM.
+    T.check(counted.A_TRADER, "a trade is counted -- its receipt is its own row")
+    T.check(counted.A_EXHIBIT, "and an exhibit is, because the dex records it")
+
+    -- and she keeps her bubble in the world either way: knowing MOM will
+    -- heal you is the whole point of the marker
+    liveOw.npcs = { { id = "mum", px = 0, py = 0, cellX = 0, cellY = 0,
+                      def = { text = "HEALER", name = "A_HEALER", index = 2 } } }
+    run.loader.events:emit("map.entered", { map = "VIRIDIAN_CITY" })
+    T.eq(run.loader.exports.npc_bubbles.tiers().mum, 1,
+      "she still wears her ! -- it is the counting that changed, not the bubble")
+    liveOw.npcs = {}
+  end
+
+  -- ------- a one-shot event that has already fired
+  --
+  -- The POKeMON TOWER rescue sets two flags, moves people about and warps
+  -- you out. No gift and no condition, so nothing in it could ever read as
+  -- decided: it stayed a "?" for the rest of the save. The flags it sets
+  -- are its receipt, the same argument alreadyClaimed makes about a gift.
+  do
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+      RESCUE = { { "show_text", "you found me" },
+                 { "set_flag", "EVENT_RESCUED" },
+                 { "show_object", "MR_FUJIS_HOUSE", "MRFUJISHOUSE_MR_FUJI" } },
+    } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    local fuji = { id = "fuji", px = 0, py = 0, cellX = 0, cellY = 0,
+                   def = { text = "RESCUE", name = "TOWER_FUJI", index = 1 } }
+    liveOw.map = { id = "VIRIDIAN_CITY" }
+    liveOw.npcs = { fuji }
+    save.flags = {}
+    run.loader.events:emit("map.entered", { map = "VIRIDIAN_CITY" })
+    T.eq(run.loader.exports.npc_bubbles.tiers().fuji, 2,
+      "before it happens, the world is still going to change")
+    save.flags.EVENT_RESCUED = true
+    run.loader.events:emit("map.entered", { map = "VIRIDIAN_CITY" })
+    T.eq(run.loader.exports.npc_bubbles.tiers().fuji, nil,
+      "once its flag is set there is nothing left for it to change")
+
+    -- A script that ASKS something can still decide differently later, so
+    -- this must not silence one just because a flag it sets is true. The
+    -- POTION is what makes the check pass, so the walk actually REACHES the
+    -- change and the rule is consulted -- without it the script never
+    -- reads as a change at all and this proves nothing.
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+      RESCUE = { { "check_item", "POTION" },
+                 { "jump_if_false", 5 },
+                 { "set_flag", "EVENT_RESCUED" },
+                 { "show_text", "carry on" },
+                 { "show_text", "nothing to do" } },
+    } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    save.inventory = { POTION = 1 }
+    run.loader.events:emit("map.entered", { map = "VIRIDIAN_CITY" })
+    T.eq(run.loader.exports.npc_bubbles.tiers().fuji, 2,
+      "one that asks a question keeps its bubble, flag set or not")
+    save.inventory = {}
+    liveOw.npcs = {}
+    save.flags = {}
+  end
+
+  -- ------- everywhere else you have been
     --
     -- save.visited only ever holds the eleven fly towns -- a route or a cave
     -- sets no flag when you walk into it. What DOES get written down is

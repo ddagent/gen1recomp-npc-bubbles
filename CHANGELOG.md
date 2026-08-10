@@ -3,6 +3,28 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.2
+
+### Fixed
+
+- **MOM no longer sits on the checklist for ever.** She heals your party
+  and the game writes nothing down, so she offers it again every time --
+  a marker worth having over her head, but never a job that can be crossed
+  off, and counting it meant the list could never be finished. She keeps
+  her `!`; she has left the tally. The SILPH CO nurse is the same.
+
+  A gift now only counts as a job if finishing it is recorded somewhere: a
+  flag, a trade's own row, the POKeDEX, the badge table, or simply not
+  being on the map any more. Everything else is a service rather than a
+  task.
+
+- **A one-shot event that has already happened no longer wears a `?`.**
+  The POKeMON TOWER rescue sets its flags, moves people about and sends
+  you on your way, and then stayed marked for the rest of the save. The
+  flags it sets are its receipt: once they are all true there is nothing
+  left for it to change. An event that still asks a question keeps its
+  marker, because it can still turn out differently.
+
 ## 2.3.1
 
 ### Added

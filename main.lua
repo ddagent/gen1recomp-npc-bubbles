@@ -515,6 +515,32 @@ return function(mod)
     return any and allClaimed
   end
 
+  -- A one-shot event that has already fired.
+  --
+  -- The POKeMON TOWER rescue sets two flags, shows MR FUJI at his house,
+  -- hides the SAFFRON guards and warps you out. No gift, no condition --
+  -- so nothing in it can ever read as decided, and it stayed a "?" for the
+  -- rest of the save, over a man who is no longer even the point.
+  --
+  -- The flags it sets ARE its receipt, which is the same argument
+  -- alreadyClaimed makes about a gift: once every flag a script would set
+  -- is already true, there is nothing left for it to change.
+  local function alreadySettled(prog, game)
+    local any = false
+    for _, row in ipairs(prog or {}) do
+      if type(row) == "table" then
+        -- a script that asks anything can still decide differently later,
+        -- so this only applies to the ones that just DO things
+        if CONDITIONS[row[1]] then return false end
+        if row[1] == "set_flag" or row[1] == "receipt" then
+          any = true
+          if not condition("check_flag", row[2], game) then return false end
+        end
+      end
+    end
+    return any
+  end
+
   -- A leader still owing a badge or a TM.  The badge lands with the win and
   -- the TM is a separate hand-over that retries when the bag was full at the
   -- time, so each has its own receipt and either one outstanding is a gift.
@@ -1023,6 +1049,8 @@ return function(mod)
     local prog = programFor(entry, game, npc, ow)
     if prog then
       local tier = classify(prog, game, entry)
+      -- a one-shot event whose flags are all set has already happened
+      if tier == 2 and alreadySettled(prog, game) then return nil, prog end
       -- a trainer keeps a gift, loses everything softer
       if isTrainer and tier ~= 1 and tier ~= 4 then return nil end
       -- and a smile you have already heard is not news until it changes
@@ -1069,7 +1097,7 @@ return function(mod)
     if not safeToRun(mapId, textConst, entry) then return nil end
     local prog = programFor(entry, game, nil, ow)
     local tier = prog and classify(prog, game, entry) or nil
-    return tier == 1 and 1 or nil
+    return tier == 1 and 1 or nil, prog
   end
 
   local function rebuild()
@@ -1930,6 +1958,12 @@ return function(mod)
   -- no honest set of events to hang the invalidation on, and a score that
   -- is occasionally a step behind is worse than one that costs a moment.
   local baselineCache, baselineFor = nil, nil
+  -- how many times the baseline has actually been worked out. Only a test
+  -- reads it, and only to prove the cache both HOLDS and CLEARS: a cache
+  -- that never clears serves yesterday's score for ever, and nothing on
+  -- screen would say so.
+  local baselineBuilds = 0
+  mod.exports.baselineBuilds = function() return baselineBuilds end
 
   -- A different save is a different set of people, and the baseline reads
   -- the party and the player out of it, so it cannot be carried across.
@@ -2003,6 +2037,7 @@ return function(mod)
         end
       end
       baselineCache, baselineFor = tracked, maps
+      baselineBuilds = baselineBuilds + 1
     end
 
     -- Somebody who is not on the map right now is one of two different
@@ -2018,7 +2053,47 @@ return function(mod)
     -- 1/3 for finishing him.  A total that shrinks when you do the thing it
     -- counts is worse than no total.  His flag, on the other hand, says
     -- plainly that it happened.
+    -- Can finishing this ever be WRITTEN DOWN?
+    --
+    -- MOM heals your party and records nothing, so she offers it again for
+    -- ever: a real "!" worth having over her head, but never a job that can
+    -- be crossed off. Counting her means the checklist can never be
+    -- finished. The SILPH CO nurse is the same, and so are the vending
+    -- machines on the CELADON MART roof.
+    --
+    -- A receipt is not only a set_flag. A trade carries its own in the
+    -- third slot of its row, and an exhibit is recorded in the POKeDEX --
+    -- reading only set_flag would throw out all six in-game trades and the
+    -- SNORLAX the SS ANNE gentleman shows you. Being paid from the
+    -- victories table counts, and so does being able to leave the map:
+    -- a fossil or a ball is finished by no longer being there.
     local defaults = defaultToggles()
+    local function recordable(item)
+      -- A sign is judged the same way as a person. The FUCHSIA placards are
+      -- recorded in the POKeDEX and finish; the CELADON MART roof machines
+      -- sell you a drink and record nothing, so they never do.
+      local obj = item.npc and item.npc.def
+      if obj then
+        if victoryReward(obj, game) then return true end
+        if obj.item or obj.pokemon then return true end
+        local byMap = defaults[item.mapId]
+        if obj.name and byMap and byMap[obj.name] ~= nil then return true end
+      end
+      local gives = false
+      for _, row in ipairs(item.prog or {}) do
+        if type(row) == "table" then
+          local verb = row[1]
+          if verb == "set_flag" or verb == "receipt" then return true end
+          if verb == "trade" and row[3] then return true end
+          if verb == "mark_seen" then return true end
+          if GIVES[verb] then gives = true end
+        end
+      end
+      -- nothing to give and nothing recorded: not a job, just somebody who
+      -- says different things -- which the smile already covers
+      return not gives
+    end
+
     local function presence(item, realOw)
       if realOw:objectVisible(item.npc) then return "here" end
       local obj = item.npc.def
@@ -2063,6 +2138,7 @@ return function(mod)
       -- not see him; somebody you have already dealt with is not a task
       -- today but was one, and dropping them would shrink the total every
       -- time you finished something.
+      if not skip and not recordable(item) then skip = true end
       if not skip and (isTask(item.base) or outstanding) then
         counted[#counted + 1] = item
         item.outstanding = outstanding and true or false

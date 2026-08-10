@@ -87,9 +87,12 @@ glance where there is most still to do. It only lists places you have
 actually been, so it never names somewhere you have not found yet — towns,
 routes and caves alike.
 
-Only jobs count. The hundreds of people with nothing to offer are left out,
-and so are smiles — a smile means someone is worth another word later, not
-that you have something to do. Somebody who has finished with you and left
+Only jobs that can be finished count. MOM heals your party and the game
+writes nothing down, so she offers it again every time — she keeps her `!`,
+but she is not on the tally, because she could never be crossed off it. The
+hundreds of people with nothing to offer are left out too, and so are
+smiles — a smile means someone is worth another word later, not that you
+have something to do. Somebody who has finished with you and left
 town still counts, and counts as done — the old man outside Viridian does
 not vanish from the tally when he packs up. Somebody who has not shown up
 yet is not counted until they do, so the total grows a little as the game
