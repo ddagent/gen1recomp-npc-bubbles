@@ -3,6 +3,54 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.8
+
+### Changed
+
+- **Everywhere else you have been now sits under its own PLACES VISITED
+  heading**, so it reads as a second group rather than as more of the place
+  you are standing in.
+
+## 2.3.7
+
+### Fixed
+
+- **The GAME CORNER prize counters have left the checklist.** They sell you
+  TMs and Pokemon for coins and write nothing down, so like the CELADON MART
+  vending machines they could never be crossed off -- but they ask for the
+  COIN CASE first, and a shop that asks for something before it opens was
+  being judged on a starting save that has none, where it looks like somebody
+  with nothing to offer. All three kept their place on the tally for ever.
+  They keep their `!`.
+
+## 2.3.6
+
+### Fixed
+
+- **The checklist reads properly under Gen1 Modern UI.** The line under the
+  place you are in was reaching it as a literal row of dashes you could put
+  the cursor on. It now uses that mod's own heading, which draws its own
+  divider and is skipped by the cursor, and each count sits in the right-hand
+  column instead of on a line of its own.
+
+## 2.3.5
+
+### Changed
+
+- **Every count is on its own line, hard left.** They used to sit after the
+  name, so the column wandered with the length of each place. Now it reads
+  straight down.
+- **The place you are standing in has a line under it**, so the buildings
+  beneath it plainly belong to it rather than looking like separate places.
+
+## 2.3.4
+
+### Fixed
+
+- **Long names are no longer cut short.** BLUES HOUSE read as `BLUES` where
+  the name and its count would not fit on one line together. Names now carry
+  on to a second line.
+
 ## 2.3.3
 
 ### Fixed

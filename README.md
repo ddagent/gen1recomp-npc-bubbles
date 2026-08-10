@@ -82,13 +82,15 @@ Each place breaks down by building, so a town lists its gym, its mart and
 its museum on separate lines with their own counts. Standing inside one of
 them shows the same list — the town you are in, not the room.
 
-Under that is everywhere you have been, one line each, so you can see at a
-glance where there is most still to do. It only lists places you have
+Under **PLACES VISITED** is everywhere else you have been, one line each, so
+you can see at a glance where there is most still to do. It only lists places you have
 actually been, so it never names somewhere you have not found yet — towns,
 routes and caves alike.
 
-Only jobs that can be finished count. MOM heals your party and the game
-writes nothing down, so she offers it again every time — she keeps her `!`,
+Only jobs that can be finished count. Shops are not jobs: the CELADON MART
+vending machines and the GAME CORNER prize counters take your money and
+write nothing down, so they are never on the tally. MOM heals your party and
+the game writes nothing down either, so she offers it again every time — she keeps her `!`,
 but she is not on the tally, because she could never be crossed off it. The
 hundreds of people with nothing to offer are left out too, and so are
 smiles — a smile means someone is worth another word later, not that you

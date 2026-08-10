@@ -2069,6 +2069,19 @@ return function(mod)
     -- victories table counts, and so does being able to leave the map:
     -- a fossil or a ball is finished by no longer being there.
     local defaults = defaultToggles()
+    -- Judged on everything we have watched them do -- what they offer on a
+    -- new game AND what they are offering now.
+    --
+    -- The baseline save carries no inventory, so a script gated on an item
+    -- turns us away at the door and the baseline shows nothing: the three
+    -- GAME CORNER prize counters ask for the COIN CASE, so they read as
+    -- somebody with nothing to give, which is recordable, and joined the
+    -- tally as three jobs that can never be finished. They are the same
+    -- kind of thing as the vending machines -- a shop -- and those were
+    -- only caught because money is the one thing the baseline inherits.
+    --
+    -- A receipt anywhere is still a receipt, so this only ever removes the
+    -- ones with no receipt on any path.
     local function recordable(item)
       -- A sign is judged the same way as a person. The FUCHSIA placards are
       -- recorded in the POKeDEX and finish; the CELADON MART roof machines
@@ -2080,16 +2093,23 @@ return function(mod)
         local byMap = defaults[item.mapId]
         if obj.name and byMap and byMap[obj.name] ~= nil then return true end
       end
+      -- Not ipairs over a list of the two: the baseline is nil for exactly
+      -- the scripts this is here to catch, and a nil first element ends the
+      -- walk before it starts.
       local gives = false
-      for _, row in ipairs(item.prog or {}) do
-        if type(row) == "table" then
-          local verb = row[1]
-          if verb == "set_flag" or verb == "receipt" then return true end
-          if verb == "trade" and row[3] then return true end
-          if verb == "mark_seen" then return true end
-          if GIVES[verb] then gives = true end
+      local function receipted(prog)
+        for _, row in ipairs(prog or {}) do
+          if type(row) == "table" then
+            local verb = row[1]
+            if verb == "set_flag" or verb == "receipt" then return true end
+            if verb == "trade" and row[3] then return true end
+            if verb == "mark_seen" then return true end
+            if GIVES[verb] then gives = true end
+          end
         end
+        return false
       end
+      if receipted(item.prog) or receipted(item.live) then return true end
       -- nothing to give and nothing recorded: not a job, just somebody who
       -- says different things -- which the smile already covers
       return not gives
@@ -2117,16 +2137,23 @@ return function(mod)
       local realOw = worlds[item.mapId] or remoteWorld(item.mapId, game)
       worlds[item.mapId] = realOw
       local outstanding, skip = false, false
+      -- tracked is CACHED between calls, so this has to be cleared rather
+      -- than only written: somebody who is not looked at this time round
+      -- (not turned up yet, or gone) would otherwise still be judged on
+      -- what they were offering the last time anybody asked.
+      item.live = nil
       if item.sign then
-        local ok, now = pcall(signTierFor, item.entry, game, realOw,
-                              item.mapId, item.signText)
+        local ok, now, live = pcall(signTierFor, item.entry, game, realOw,
+                                    item.mapId, item.signText)
         outstanding = ok and now ~= nil
+        item.live = ok and live or nil
       else
         local state = presence(item, realOw)
         if state == "here" then
-          local ok, now = pcall(tierFor, item.npc, item.entry, game,
-                                realOw, item.mapId, false)
+          local ok, now, live = pcall(tierFor, item.npc, item.entry, game,
+                                      realOw, item.mapId, false)
           outstanding = ok and isTask(now)
+          item.live = ok and live or nil
         elseif state == "later" then
           -- has not turned up yet: not a task you have failed to do
           skip = true
@@ -2278,22 +2305,23 @@ return function(mod)
     return got and pal or nil
   end
 
-  -- A name that fits, shortened the way a person would.
+  -- A place, then its tally on the line below it, hard left.
   --
-  -- Dropping whole words beats cutting characters: VIRIDIAN CITY becomes
-  -- VIRIDIAN rather than VIRIDIAN C, and every town in Kanto is still told
-  -- apart by its first word. Only if one word is itself too long does it
-  -- get cut.
-  local function fitName(name, room)
-    if #name <= room then return name end
-    local words = {}
-    for word in name:gmatch("[^ ]+") do words[#words + 1] = word end
-    while #words > 1 do
-      words[#words] = nil
-      local shorter = table.concat(words, " ")
-      if #shorter <= room then return shorter end
-    end
-    return name:sub(1, room)
+  -- Always on its own line, not only when it will not fit: BLUES HOUSE
+  -- wrapping while OAKS LAB stayed on one line left the column ragged and
+  -- the numbers floating away from the names they belong to. Every entry
+  -- reads the same way now -- what it is, then how much of it is left.
+  local function tallyLines(name, done, total, cols)
+    local lines = {}
+    for _, part in ipairs(wrapWords(name, cols)) do lines[#lines + 1] = part end
+    lines[#lines + 1] = done .. "/" .. total
+    return lines
+  end
+
+  -- Under the name of the place you are standing in, so the buildings
+  -- listed below plainly belong to it rather than sitting beside it.
+  local function underline(cols)
+    return string.rep("-", cols)
   end
 
   -- Where the save can prove you have been.
@@ -2395,43 +2423,55 @@ return function(mod)
 
   -- The lines of the checklist: the score, where you are, and the
   -- buildings of that place one per line.
+  -- The second return says what each line is -- "head" for the name of the
+  -- place you are in, "rule" for the line drawn under it, "tally" for a
+  -- count belonging to the line above.  Our own screen draws all three
+  -- literally; a presenter with real headings and a right-hand column can
+  -- say the same thing its own way, off the one description rather than by
+  -- guessing from the characters.
   local function checklistLines()
     local ok, score = pcall(completion)
-    if not (ok and score) then return { "NOTHING YET" } end
-    local lines = { score.done .. "/" .. score.total .. " DONE" }
-    if score.place then
-      lines[#lines + 1] = ""
-      for _, line in ipairs(wrapWords(score.place, GUIDE_COLS)) do
-        lines[#lines + 1] = line
-      end
-      -- one line per building.  The count goes hard right and the name gets
-      -- whatever is left, cut rather than wrapped: a name folding onto a
-      -- second line separates it from its own number.
-      for _, area in ipairs(score.areas or {}) do
-        local tally = area.done .. "/" .. area.total
-        -- shortened the same way the places below it are, by dropping whole
-        -- words: MELANIES HOUSE becomes MELANIES, not MELANIES H
-        local name = fitName(area.name, GUIDE_COLS - #tally - 1)
-        lines[#lines + 1] = name
-                            .. string.rep(" ", GUIDE_COLS - #name - #tally)
-                            .. tally
+    if not (ok and score) then return { "NOTHING YET" }, {} end
+    local lines, marks = { score.done .. "/" .. score.total .. " DONE" }, {}
+    local function put(line, mark)
+      lines[#lines + 1] = line
+      marks[#lines] = mark
+    end
+    local function putTally(name, done, total)
+      local rows = tallyLines(name, done, total, GUIDE_COLS)
+      for i, line in ipairs(rows) do
+        put(line, i == #rows and "tally" or nil)
       end
     end
-    -- then everywhere else you have been, one line each
+    if score.place then
+      put("")
+      for _, line in ipairs(wrapWords(score.place, GUIDE_COLS)) do
+        put(line, "head")
+      end
+      put(underline(GUIDE_COLS), "rule")
+      -- one line per building, under the rule, so they plainly belong to
+      -- the place named above rather than sitting beside it
+      for _, area in ipairs(score.areas or {}) do
+        putTally(area.name, area.done, area.total)
+      end
+    end
+    -- then everywhere else you have been, one line each, under a heading of
+    -- their own so they read as a second group rather than as more of the
+    -- place above them. Exactly the width of the box, which is why it is
+    -- not the "EVERYWHERE ELSE" the rest of the mod says -- that is one
+    -- character too long and would wrap.
     local elsewhere = visitedPlaces(mod.world and mod.world.game, score,
                                     score.anchor)
     if #elsewhere > 0 then
-      lines[#lines + 1] = ""
+      put("")
+      put("PLACES VISITED", "head")
+      put(underline(GUIDE_COLS), "rule")
       for _, bucket in ipairs(elsewhere) do
-        local tally = (bucket.total - bucket.left) .. "/" .. bucket.total
-        local name = fitName((bucket.mapId:gsub("_", " ")),
-                             GUIDE_COLS - #tally - 1)
-        lines[#lines + 1] = name
-                            .. string.rep(" ", GUIDE_COLS - #name - #tally)
-                            .. tally
+        putTally((bucket.mapId:gsub("_", " ")), bucket.total - bucket.left,
+                 bucket.total)
       end
     end
-    return lines
+    return lines, marks
   end
 
   -- One screen, two contents.
@@ -2457,9 +2497,10 @@ return function(mod)
     self.entries = {}
     local y = 0
     if kind == "checklist" then
-      local lines = checklistLines()
+      local lines, marks = checklistLines()
       local height = #lines * G_ROW
-      self.entries[1] = { tier = nil, lines = lines, y = y, height = height }
+      self.entries[1] = { tier = nil, lines = lines, marks = marks,
+                          y = y, height = height }
       y = y + height + G_ENTRY_GAP
     else
       for _, row in ipairs(GUIDE) do
@@ -2750,13 +2791,30 @@ return function(mod)
         NpcBubblesChecklist = {
           match = matcher("NpcBubblesChecklist"),
           canSuppressNative = true,
+          -- Said in their vocabulary rather than ours.  A heading of theirs
+          -- draws its own rule and the cursor steps over it, so ours would
+          -- arrive as a selectable row of dashes; a count belongs in the
+          -- right-hand column, where their width is, rather than on a line
+          -- of its own.  Both come off the marks, so the two screens cannot
+          -- drift apart.
           model = function(_, state)
             local rows = {}
             for _, entry in ipairs(state.entries or {}) do
-              for _, line in ipairs(entry.lines or {}) do
-                -- a blank line is the gap between the place you are in and
-                -- everywhere else; keep it as a spacer rather than a row
-                rows[#rows + 1] = { label = line, enabled = line ~= "" }
+              local marks = entry.marks or {}
+              for i, line in ipairs(entry.lines or {}) do
+                local mark, last = marks[i], rows[#rows]
+                if mark == "rule" then
+                  -- their heading draws it
+                elseif mark == "head" and last and last.header then
+                  last.label = last.label .. " " .. line   -- a wrapped name
+                elseif mark == "tally" and last then
+                  last.value = line
+                else
+                  -- a blank line is the gap between the place you are in and
+                  -- everywhere else; keep it as a spacer rather than a row
+                  rows[#rows + 1] = { label = line, enabled = line ~= "",
+                                      header = mark == "head" or nil }
+                end
               end
             end
             local at = rowAt(state, #rows)

@@ -44,10 +44,28 @@ MUTATIONS = [
     ("a sign's program never reaches the rule that judges it",
      '              local ok, base, prog = pcall(signTierFor, entry, fresh, freshOw,\n                                           mapId, sign.text)',
      '              local ok, base = pcall(signTierFor, entry, fresh, freshOw,\n                                     mapId, sign.text)'),
+    ("a name is cut to share a line with its count",
+     '''    lines[#lines + 1] = done .. "/" .. total''',
+     '''    lines[1] = lines[1]:sub(1, 9) .. " " .. done .. "/" .. total'''),
+    ("the place you are in loses the rule under it",
+     '''      put(underline(GUIDE_COLS), "rule")\n''', ''),
+    # Left out, like the orphan sort, but for the opposite reason: the
+    # clearing of item.live SURVIVES, and reading the code says why. For a
+    # stale value to change an answer, somebody has to be counted on their
+    # baseline tier, carry no receipt on it, and then not be looked at this
+    # time round -- and everybody who can go missing is either paid from the
+    # victories table or holds an item, both of which are recordable before
+    # any program is read. So the line is defence against a state nothing
+    # reaches today, not a fix for a live bug, and a mutation that cannot
+    # fail is not evidence of anything. Delete the line and this list stays
+    # green; that is the honest answer, so it is written down instead.
     ("a gift with no receipt is counted",
      '      if not skip and not recordable(item) then skip = true end\n', ''),
+    ("a shop is judged only on what a new game would see",
+     '''      if receipted(item.prog) or receipted(item.live) then return true end''',
+     '''      if receipted(item.prog) then return true end'''),
     ("only set_flag counts as a receipt",
-     '          if verb == "trade" and row[3] then return true end\n          if verb == "mark_seen" then return true end\n', ''),
+     '            if verb == "trade" and row[3] then return true end\n            if verb == "mark_seen" then return true end\n', ''),
     ("a settled one-shot event stays a ?",
      '      if tier == 2 and alreadySettled(prog, game) then return nil, prog end\n', ''),
     ("a settled event is silenced even when it asks something",
@@ -71,6 +89,8 @@ MUTATIONS = [
     # rule is pinned by a test asserting the first name in order instead.
     #   ("a sealed-off block names itself at random",
     #    '    table.sort(orphans)\n', ''),
+    ("everywhere else you have been loses its heading",
+     '''      put("PLACES VISITED", "head")\n      put(underline(GUIDE_COLS), "rule")\n''', ''),
     ("places are listed by name rather than map number",
      '      if ia ~= ib then return ia < ib end',
      '      if true then return a.mapId < b.mapId end'),
@@ -95,6 +115,18 @@ MUTATIONS = [
     ("a row with a picture is as wide as the rest",
      '    local WRAP, WRAP_WITH_PICTURE = 22, 15',
      '    local WRAP, WRAP_WITH_PICTURE = 22, 22'),
+    ("our rule reaches the presenter as a row of dashes",
+     '''                if mark == "rule" then
+                  -- their heading draws it
+                elseif mark == "head"''',
+     '''                if mark == "head"'''),
+    ("the place you are in is not offered as a heading of theirs",
+     '''                                      header = mark == "head" or nil }''',
+     '''                                      header = nil }'''),
+    ("a count is a row of its own in their list too",
+     '''                elseif mark == "tally" and last then
+                  last.value = line
+''', ''),
     ("the presented list cannot be scrolled",
      '      local frac = math.max(0, math.min(1, (state.scroll or 0) / max))',
      '      local frac = 0'),

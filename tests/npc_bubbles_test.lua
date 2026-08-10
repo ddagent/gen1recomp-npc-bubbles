@@ -2031,6 +2031,93 @@ do
     T.check(not signs.VENDING,
       "a machine that sells you a drink and records nothing is not")
 
+    -- A shop behind a door the baseline cannot open.
+    --
+    -- The baseline save carries no inventory at all, so a script that asks
+    -- for an item first turns the probe away at the top and its program
+    -- comes back empty -- which reads as "nothing to give", which is
+    -- recordable. The three GAME CORNER prize counters ask for the COIN
+    -- CASE, so they joined the tally as three jobs that could never be
+    -- finished, while the roof machines were caught only because money is
+    -- the one thing the baseline inherits.
+    local gated = function(g)
+      if not g.save.inventory.COIN_CASE then return end
+      local ListMenu = require("src.ui.ListMenu")
+      g.stack:push(ListMenu.new(g, "PRIZES", {
+        { label = "TM23", value = { id = "TM23", price = 3300 } },
+        { label = "NO THANKS" },
+      }, { onChoose = function(item)
+        g.save.inventory[item.value.id] = 1
+      end }))
+    end
+    local receipted = function(g)
+      if not g.save.inventory.COIN_CASE then return end
+      g.save.flags.EVENT_GOT_THE_THING = true
+      g.save.inventory.TM23 = 1
+    end
+    Data.maps = {
+      VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {}, index = 1,
+        objects = {},
+        signs = { { text = "PRIZES", x = 1, y = 1 },
+                  { text = "REWARDER", x = 2, y = 2 } } },
+    }
+    MapScripts.attachBase("VIRIDIAN_CITY",
+      { talk = { PRIZES = gated, REWARDER = receipted } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    save.inventory.COIN_CASE = 1
+    save.flags = {}
+    local gatedSigns = {}
+    for _, item in ipairs(count().tasks or {}) do
+      if item.sign then gatedSigns[item.signText] = true end
+    end
+    T.check(not gatedSigns.PRIZES,
+      "a shop you must carry something to enter is not a job either -- the "
+      .. "baseline never gets through the door, so what it does is only "
+      .. "visible on the save in front of us")
+    T.check(gatedSigns.REWARDER,
+      "and one behind the same door that DOES write it down still counts, "
+      .. "so this drops shops rather than everything with a lock on it")
+    save.inventory.COIN_CASE = nil
+
+    -- ...and the other way round: a shop that has already closed.
+    --
+    -- Nothing is on offer on the save in front of us, so only what a NEW
+    -- game would have seen says this was ever a shop. Both programs have to
+    -- reach the rule -- the live one alone would put this back on a tally
+    -- it can never be crossed off.
+    local closed = function(g)
+      if g.save.flags.CLOSED_FOR_GOOD then return end
+      local ListMenu = require("src.ui.ListMenu")
+      g.stack:push(ListMenu.new(g, "DRINKS", {
+        { label = "FRESH WATER", value = { id = "FRESH_WATER", price = 200 } },
+        { label = "NO THANKS" },
+      }, { onChoose = function(item)
+        g.save.inventory[item.value.id] = 1
+      end }))
+    end
+    -- with a real task beside it: counting nothing at all returns no score
+    -- at all, and "the shop is not in it" is true of an empty list too
+    Data.maps = {
+      VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {}, index = 1,
+        objects = {}, signs = { { text = "CLOSED", x = 1, y = 1 },
+                                { text = "PLACARD", x = 2, y = 2 } } },
+    }
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+      CLOSED = closed, PLACARD = { { "mark_seen", "SNORLAX" } } } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    save.flags = { CLOSED_FOR_GOOD = true }
+    save.pokedex = { owned = {}, seen = {} }
+    local shut, score = {}, count()
+    T.check(score ~= nil, "there is a score to read at all")
+    for _, item in ipairs((score or {}).tasks or {}) do
+      if item.sign then shut[item.signText] = true end
+    end
+    T.check(shut.PLACARD, "the placard beside it is counted")
+    T.check(not shut.CLOSED,
+      "a shop with its shutters down is still not a job -- what a new game "
+      .. "would have seen is what says so")
+    save.flags = {}
+
     -- and she keeps her bubble in the world either way: knowing MOM will
     -- heal you is the whole point of the marker
     liveOw.npcs = { { id = "mum", px = 0, py = 0, cellX = 0, cellY = 0,
@@ -2131,8 +2218,15 @@ do
       T.check(all:find("VIRIDIAN"), "a town you have visited is listed")
       T.check(not all:find("PEWTER"),
         "one you have not been to is not, however much is left in it")
-      T.check(not all:match("CERULEAN%s+%d+/%d+"),
-        "and the place you are standing in is not repeated below itself")
+      -- Counted, not matched against one line: a name too long to share a
+      -- line with its count is now written above it, so a pattern looking
+      -- for "CERULEAN 0/1" cannot see the duplicate it is meant to catch.
+      local mentions = 0
+      for _, l in ipairs(select(2, listed())) do
+        if l:find("CERULEAN", 1, true) then mentions = mentions + 1 end
+      end
+      T.eq(mentions, 1,
+        "the place you are standing in is named once, as the heading")
 
       -- the part save.visited cannot do: a route or a cave
       save.defeatedTrainers = { PEWTER_CITY_obj_1 = true }
@@ -2183,18 +2277,41 @@ do
         Data.maps = was
       end
 
-      -- A name too long to sit beside its count loses whole words rather
-      -- than letters: VIRIDIAN CITY becomes VIRIDIAN, never VIRIDIAN C.
+      -- A name too long to share a line with its count keeps the whole of
+      -- itself and the count moves underneath, hard right.
+      --
+      -- Dropping the last word was fine for VIRIDIAN CITY, which is still
+      -- VIRIDIAN, and wrong for BLUES HOUSE, which became BLUES. That one
+      -- misses by a single character: the name and the count together are
+      -- exactly the width of the box, with nothing left for the space
+      -- between them.
       local _, lines = listed()
-      local shortened
-      for _, l in ipairs(lines) do
-        if l:find("^VIRIDIAN%s+%d+/%d+$") then shortened = l end
+      local named, tallyUnder
+      for i, l in ipairs(lines) do
+        if l:find("^VIRIDIAN CITY%s*$") then
+          named = i
+          local nxt = lines[i + 1]
+          tallyUnder = nxt and nxt:find("^%d+/%d+%s*$") ~= nil
+        end
       end
-      T.check(shortened ~= nil,
-        "the listed name drops its last word: " .. table.concat(lines, " | "))
+      T.check(named ~= nil,
+        "the name is written out in full: " .. table.concat(lines, " | "))
+      T.check(tallyUnder,
+        "with its count on the line below it, hard left -- every entry the "
+        .. "same, so the column does not go ragged")
 
-      -- The game's own map numbering, not the names: sorted by name,
-      -- ROUTE 10 comes out above ROUTE 2.
+      -- and the place you are standing in has a rule under it, so the
+      -- buildings listed below plainly belong to it
+      local heading, ruled
+      for i, l in ipairs(lines) do
+        if l:find("^CERULEAN CITY%s*$") then
+          heading = i
+          ruled = (lines[i + 1] or ""):find("^%-+$") ~= nil
+        end
+      end
+      T.check(heading ~= nil, "the place you are in is named")
+      T.check(ruled, "and underlined, so what follows is plainly inside it")
+
       -- The two orders have to DISAGREE here or this proves nothing:
       -- PEWTER sorts before VIRIDIAN by name, so give VIRIDIAN the lower
       -- map number and the answers separate.
@@ -2279,6 +2396,38 @@ do
       end
     end
 
+    -- A checklist with something IN it. The block above tears the maps
+    -- down, so this ran against an empty list for a while and every
+    -- assertion about the shape of it was true of nothing.
+    local GIVER = { { "check_flag", "EVENT_TOOK_IT" },
+                    { "jump_if_true", 6 },
+                    { "give_item", "POTION" },
+                    { "set_flag", "EVENT_TOOK_IT" },
+                    { "jump", "end" },
+                    { "show_text", "nothing more" } }
+    local MapScripts = require("src.script.MapScripts")
+    local save = run.loader.game.save
+    for _, id in ipairs({ "PEWTER_CITY", "PEWTER_GYM", "VIRIDIAN_CITY" }) do
+      MapScripts.attachBase(id, { talk = { GIVER = GIVER } })
+      MapScripts.invalidate(id)
+    end
+    local function giver(name)
+      return { name = name, text = "GIVER", index = 1, x = 1, y = 1 }
+    end
+    Data.maps = {
+      PEWTER_CITY   = { tileset = "OVERWORLD", index = 2, signs = {},
+                        objects = { giver("P_GIVER") },
+                        warps = { { map = "PEWTER_GYM" } } },
+      PEWTER_GYM    = { tileset = "GYM", index = 3, signs = {}, warps = {},
+                        objects = { giver("G_GIVER") } },
+      VIRIDIAN_CITY = { tileset = "OVERWORLD", index = 1, signs = {},
+                        warps = {}, objects = { giver("V_GIVER") } },
+    }
+    save.visited = { PEWTER_CITY = true, VIRIDIAN_CITY = true }
+    save.flags, save.inventory = {}, {}
+    save.defeatedTrainers, save.itemsTaken = {}, {}
+    liveOw.map = { id = "PEWTER_CITY" }
+
     -- the description is DATA. Their side rejects a model holding any
     -- function, so nothing of ours can run inside theirs.
     local page = Data.screens.npc_bubbles_checklist
@@ -2306,6 +2455,40 @@ do
       "without claiming the other one")
     T.check(not contract.screens.NpcBubblesChecklist.match(nil),
       "and does not fall over when handed nothing")
+
+    -- Their vocabulary, not ours.  Their heading draws its own rule and
+    -- their cursor steps over it, so our line of dashes must not reach
+    -- them as a row -- and a count belongs in their right-hand column,
+    -- not on a line of its own.  Checked against the marks the screen
+    -- itself publishes, so this cannot pass by agreeing with a copy of
+    -- the layout written out here.
+    local heads, tallies = 0, 0
+    for i, mark in pairs(built.entries[1].marks or {}) do
+      if mark == "head" then heads = heads + 1 end
+      if mark == "tally" then tallies = tallies + 1 end
+      T.check(mark ~= "rule" or (built.entries[1].lines[i] or ""):find("^%-+$"),
+        "a line marked as the rule is the rule")
+    end
+    T.check(heads > 0 and tallies > 0,
+      "the checklist says which lines are headings and which are counts")
+
+    local dashes, headers, valued = 0, 0, 0
+    for _, row in ipairs(model.rows) do
+      if tostring(row.label):find("^%-+$") then dashes = dashes + 1 end
+      if row.header then headers = headers + 1 end
+      if row.value then
+        valued = valued + 1
+        T.check(tostring(row.value):find("^%d+/%d+$"),
+          "a count sits in the value column, whole")
+        T.check(not tostring(row.label):find("^%d+/%d+$"),
+          "and not as a row of its own as well")
+      end
+    end
+    T.eq(dashes, 0, "our rule never reaches them as a row of dashes")
+    T.eq(headers, 2,
+      "both groups -- the place you are in, and everywhere else -- are "
+      .. "offered as headings of theirs")
+    T.eq(valued, tallies, "and every count reaches their value column")
 
     -- The guide's descriptions are WRAPPED across rows, and the row that
     -- carries a picture is wrapped shorter than the rest.
