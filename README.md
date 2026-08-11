@@ -49,8 +49,10 @@ are. So are ordinary trainers, who announce themselves. A gym leader keeps a
 ## Options
 
 **START → OPTIONS → NPC BUBBLES..**, near the top of the list. It holds the
-guide and every setting below. They are also on the mod manager's page —
-either place works, and both change the same setting.
+checklist, the guide and every setting below. They are also on the mod
+manager's page — either place works, and both change the same setting.
+
+![The NPC BUBBLES page, with the checklist and guide above the settings](docs/screenshot-options.png)
 
 | Option | Shows | Default |
 | --- | --- | --- |
@@ -73,19 +75,23 @@ over an NPC, so you can see which is which.
 
 ## How much is left
 
-The guide opens with a count: how many people and signs still have something
-for you, out of everyone who ever did, and the same count for wherever you
-are standing. A town is counted together with its buildings, so PEWTER CITY
-covers the gym, the mart and the museum.
+**CHECKLIST..** opens with a count: how many people and signs still have
+something for you, out of everyone who ever did, and the same count for
+wherever you are standing. A town is counted together with its buildings, so
+PEWTER CITY covers the gym, the mart and the museum.
 
 Each place breaks down by building, so a town lists its gym, its mart and
 its museum on separate lines with their own counts. Standing inside one of
 them shows the same list — the town you are in, not the room.
 
+![The checklist in PALLET TOWN, its buildings listed under it](docs/screenshot-checklist.png)
+
 Under **PLACES VISITED** is everywhere else you have been, one line each, so
-you can see at a glance where there is most still to do. It only lists places you have
-actually been, so it never names somewhere you have not found yet — towns,
-routes and caves alike.
+you can see at a glance where there is most still to do. It only lists places
+you have actually been, so it never names somewhere you have not found yet —
+towns, routes and caves alike.
+
+![The rest of the checklist: everywhere else you have been](docs/screenshot-checklist-places.png)
 
 Only jobs that can be finished count. Shops are not jobs: the CELADON MART
 vending machines and the GAME CORNER prize counters take your money and
