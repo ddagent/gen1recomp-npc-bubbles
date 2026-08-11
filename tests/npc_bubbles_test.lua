@@ -603,6 +603,50 @@ do
   T.eq(#drew, 0, "a disabled tier draws nothing")
   run.loader.modOptions.npc_bubbles = {}
 
+  -- ------- asked before the world is up, and asked again after
+  --
+  -- A rebuild that runs while there is no map yet must not stand as the
+  -- answer.  It used to: it cleared the dirty flag on its way in and then
+  -- gave up, so the empty result was final and only a map change or a
+  -- reload could undo it -- and a new game does neither, which is why the
+  -- markers stayed away until the player saved and came back.
+  do
+    local MapScripts = require("src.script.MapScripts")
+    MapScripts.attachBase("VIRIDIAN_CITY", { talk = {
+      EARLY = { { "check_flag", "EVENT_GOT_EARLY" },
+                { "jump_if_true", 5 },
+                { "give_item", "POTION" },
+                { "set_flag", "EVENT_GOT_EARLY" },
+                { "jump", "end" },
+                { "show_text", "nothing more" } },
+    } })
+    MapScripts.invalidate("VIRIDIAN_CITY")
+    Data.maps = { VIRIDIAN_CITY = { tileset = "OVERWORLD", warps = {},
+      signs = {}, index = 1,
+      objects = { { name = "EARLY_BIRD", text = "EARLY", index = 1,
+                    x = 1, y = 1 } } } }
+    local save = run.loader.game.save
+    save.flags, save.inventory = {}, {}
+    save.pokedex = { owned = {}, seen = {} }
+
+    local waiting = { id = "early", px = 0, py = 0, cellX = 1, cellY = 1,
+                      def = Data.maps.VIRIDIAN_CITY.objects[1] }
+
+    -- the world is not up: no map at all
+    liveOw.map, liveOw.npcs = nil, {}
+    run.loader.events:emit("map.entered", { map = nil })
+    T.eq(next(run.loader.exports.npc_bubbles.tiers()), nil,
+      "nothing is worked out while there is no map")
+
+    -- now it is, and nothing new happens except a frame being drawn
+    liveOw.map = { id = "VIRIDIAN_CITY", def = Data.maps.VIRIDIAN_CITY }
+    liveOw.npcs = { waiting }
+    drawFor(waiting, 0, 0)
+    T.eq(run.loader.exports.npc_bubbles.tiers()[waiting.id], 1,
+      "the next NPC drawn asks again, rather than the empty answer standing "
+      .. "until the map changes or the save is reloaded")
+  end
+
   love.graphics.draw = realDraw
 end
 

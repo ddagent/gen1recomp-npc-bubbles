@@ -3,6 +3,16 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.10
+
+### Fixed
+
+- **Bubbles no longer stay away for a whole new game.** If the markers were
+  worked out before the world had finished coming up, the empty result stood
+  as the answer -- and nothing asks again until you change map or reload, so
+  starting a new game could leave you with no bubbles at all until you saved
+  and came back. Whatever is drawn next now asks again.
+
 ## 2.3.9
 
 ### Fixed

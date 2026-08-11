@@ -1102,12 +1102,22 @@ return function(mod)
 
   local function rebuild()
     sandboxCache, sandboxFor = nil, nil   -- the save moved; the copy is stale
-    dirty = false
-    tiers = {}
+    tiers, signTiers = {}, {}
     local game = mod.world and mod.world.game
     local ow = mod.world and mod.world:overworld()
     local map = ow and ow.map
-    if not (map and map.id) then return end
+    -- Asked before the world is up, and that is not an answer: say so, so
+    -- the next NPC drawn asks again.  Not merely leaving `dirty` alone --
+    -- a rebuild is usually reached straight off an event, with nothing
+    -- dirty, so the flag has to be raised rather than kept.
+    --
+    -- Settling here instead is what could leave a game with no bubbles at
+    -- all.  Nothing else asks for a rebuild until you change map or reload,
+    -- and a new game does neither -- so the markers stayed away until the
+    -- player saved and came back, which is the one thing that fires
+    -- save.loaded.
+    if not (map and map.id) then dirty = true return end
+    dirty = false
     local view = MapScripts.get(map.id)
     local talk = view and view.talk
     if not talk then return end
@@ -1116,7 +1126,6 @@ return function(mod)
       tiers[npc.id] = tierFor(npc, key and talk[key], game, ow, map.id, true)
     end
 
-    signTiers = {}
     for _, sign in ipairs((map.def and map.def.signs) or {}) do
       local entry = sign.text and talk[sign.text]
       if entry ~= nil then
