@@ -2617,12 +2617,26 @@ return function(mod)
   --
   -- Entirely optional. Without that mod installed `find` returns nil and
   -- none of this happens.
+  local baked, bakedFade = nil, nil
+
   local function bubbleImages(game)
     -- Their rows take a picture each, but ours are crops out of one shared
     -- sheet rather than separate images, and a row cannot carry a quad. So
     -- each bubble is drawn once into a canvas of its own -- built here,
     -- when a page asks for them, because love.graphics has to exist.
+    --
+    -- Built ONCE and kept.  These are canvases on the graphics card, and
+    -- this is reached from inside a presenter's model, which is rebuilt on
+    -- every frame it draws -- so making them fresh each time meant four new
+    -- canvases per frame for as long as the page was open, left for the
+    -- collector to notice. On a handheld that took the guide from opening
+    -- instantly to a minute of no input at all.
+    --
+    -- Keyed on the faded bubble's alpha because that is baked in rather
+    -- than applied when drawn: LATER FADE has to still move it.
     if not (love and love.graphics and love.graphics.newCanvas) then return nil end
+    local fade = alphaFor(4)
+    if baked and bakedFade == fade then return baked end
     local image = art(game)
     if not (image and quads) then return nil end
     -- the size comes from the sheet's own description rather than from the
@@ -2650,6 +2664,10 @@ return function(mod)
         end
       end
     end
+    -- the old set is no longer anybody's to draw: hand the graphics card
+    -- back rather than waiting for the collector to work it out
+    for _, old in pairs(baked or {}) do pcall(function() old:release() end) end
+    baked, bakedFade = out, fade
     return out
   end
 

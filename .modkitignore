@@ -10,4 +10,10 @@
 tests/npc_bubbles_test.lua
 docs/screenshot-town.png
 docs/screenshot-bikeshop.png
+docs/screenshot-options.png
+docs/screenshot-checklist.png
+docs/screenshot-checklist-places.png
 docs/plan-talk-clearing.md
+docs/probe.md
+docs/presenting.md
+CLAUDE.md

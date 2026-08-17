@@ -3,6 +3,16 @@
 Format: [keep a changelog](https://keepachangelog.com/en/1.1.0/).
 Version headings match `manifest.json`'s `version`.
 
+## 2.3.11
+
+### Fixed
+
+- **The guide no longer locks the game up under Gen1 Modern UI.** The four
+  bubbles are drawn into pictures for that mod's rows, and they were being
+  redrawn for every frame the page was on screen -- so opening the guide on a
+  handheld could cost the best part of a minute with no input at all. They are
+  drawn once now and kept. `LATER FADE` still moves the faded `!`.
+
 ## 2.3.10
 
 ### Fixed

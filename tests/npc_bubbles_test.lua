@@ -2540,6 +2540,52 @@ do
       .. "offered as headings of theirs")
     T.eq(valued, tallies, "and every count reaches their value column")
 
+    -- ------- the pictures are baked once, not once a frame
+    --
+    -- Their side rebuilds a screen's model every frame it draws, and the
+    -- guide's model asks for the bubbles as pictures. Making them fresh each
+    -- time meant four new canvases on the graphics card per frame for as
+    -- long as the page was open, which took the guide from opening instantly
+    -- to a minute with no input at all on a handheld.
+    do
+      local guideFactory = Data.screens.npc_bubbles_guide
+      guideFactory = type(guideFactory) == "table" and guideFactory.new
+                     or guideFactory
+      local guideState = guideFactory(game)
+      local guideScreen = contract.screens.NpcBubblesGuide
+
+      local made = 0
+      local realCanvas = love.graphics.newCanvas
+      love.graphics.newCanvas = function(...)
+        made = made + 1
+        return realCanvas(...)
+      end
+
+      guideScreen.model(game, guideState)
+      local first = made
+      T.check(first > 0,
+        "the bubbles are drawn into canvases at all -- if this is zero the "
+        .. "rest of this block is checking nothing")
+
+      for _ = 1, 5 do guideScreen.model(game, guideState) end
+      T.eq(made, first,
+        "and five more frames make no more of them: they are baked once and "
+        .. "kept, not rebuilt for every frame that draws")
+
+      -- ...but LATER FADE is baked INTO the picture, so it still has to move
+      run.loader.modOptions.npc_bubbles = { later_fade = 20 }
+      guideScreen.model(game, guideState)
+      T.check(made > first,
+        "changing how solid the faded ! looks bakes them again -- the "
+        .. "setting is in the picture, not applied when it is drawn")
+      local afterFade = made
+      guideScreen.model(game, guideState)
+      T.eq(made, afterFade, "and then it settles again on the new value")
+
+      love.graphics.newCanvas = realCanvas
+      run.loader.modOptions.npc_bubbles = {}
+    end
+
     -- ...on the row it belongs to. A name too long for our box is two
     -- lines to us and must still be one row to them, or the count lands
     -- against the tail of the name instead of the whole of it.

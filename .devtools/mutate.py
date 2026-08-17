@@ -134,6 +134,11 @@ MUTATIONS = [
      '''                elseif mark == "tally" and last then
                   last.value = line
 ''', ''),
+    ("the bubble pictures are built again every frame",
+     '''    if baked and bakedFade == fade then return baked end''', ''),
+    ("the faded bubble is stuck at whatever it looked like first",
+     '''    if baked and bakedFade == fade then return baked end''',
+     '''    if baked then return baked end'''),
     ("the presented list cannot be scrolled",
      '      local frac = math.max(0, math.min(1, (state.scroll or 0) / max))',
      '      local frac = 0'),
